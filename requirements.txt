@@ -1,0 +1,10 @@
+Flask
+gunicorn
+requests
+cloudscraper
+beautifulsoup4
+lxml
+fake-useragent
+python-dotenv
+playwright
+tqdm
