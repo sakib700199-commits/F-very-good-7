@@ -1,10 +1,8 @@
-Flask
-gunicorn
 requests
-cloudscraper
+flask
 beautifulsoup4
-lxml
-fake-useragent
-python-dotenv
+chardet
+psutil
 playwright
-tqdm
+cloudscraper
+ebooklib
