@@ -1,3116 +1,4170 @@
 #!/usr/bin/env python3
 """
-novel.py — Production-Grade Enterprise Novel Scraping Platform
-==============================================================
-A single-file, high-performance, intelligent novel scraping engine
-with advanced bypass, live dashboard, and deep monitoring.
-
-Server Target: 12GB RAM / 15 CPU cores / 112GB Storage
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                                                                              ║
+║   ██████╗  ██████╗ ██████╗       ██╗     ███████╗██╗   ██╗███████╗██╗       ║
+║  ██╔════╝ ██╔═══██╗██╔══██╗      ██║     ██╔════╝██║   ██║██╔════╝██║       ║
+║  ██║  ███╗██║   ██║██║  ██║█████╗██║     █████╗  ██║   ██║█████╗  ██║       ║
+║  ██║   ██║██║   ██║██║  ██║╚════╝██║     ██╔══╝  ╚██╗ ██╔╝██╔══╝  ██║       ║
+║  ╚██████╔╝╚██████╔╝██████╔╝      ███████╗███████╗ ╚████╔╝ ███████╗███████╗  ║
+║   ╚═════╝  ╚═════╝ ╚═════╝       ╚══════╝╚══════╝  ╚═══╝  ╚══════╝╚══════╝  ║
+║                                                                              ║
+║          UPTIME MONITORING SAAS - "KHATARNAK" EDITION                        ║
+║          Neon Pink & Purple Gradient Theme | Enterprise Grade                ║
+║                                                                              ║
+║  Tech Stack:                                                                 ║
+║    Backend:  FastAPI + SQLAlchemy + Celery + Redis                           ║
+║    Database: PostgreSQL + Redis Cache                                        ║
+║    Frontend: React/Next.js + Tailwind CSS (served inline)                   ║
+║                                                                              ║
+║  Author: God-Level AI Architect                                              ║
+║  Lines:  ~4000 (Maximum Depth Single File)                                  ║
+║                                                                              ║
+╚══════════════════════════════════════════════════════════════════════════════╝
 """
 
+# =============================================================================
+# SECTION 0: IMPORTS & DEPENDENCIES
+# =============================================================================
+
 import os
-import re
 import sys
 import json
-import time
 import uuid
-import gzip
-import shutil
-import signal
-import struct
+import hmac
 import hashlib
-import logging
-import mimetypes
-import pickle
 import socket
-import string
-import threading
-import traceback
-import unicodedata
-import urllib.parse
-import zipfile
-import html as html_module
-from io import BytesIO
-from pathlib import Path
-from datetime import datetime, timedelta
-from dataclasses import dataclass, field, asdict
-from typing import (
-    Any, Callable, Dict, List, Optional, Set, Tuple, Union
-)
+import struct
+import time
+import asyncio
+import logging
+import smtplib
+import subprocess
+import platform
+import ssl
+import re
+from datetime import datetime, timedelta, timezone
+from typing import Optional, List, Dict, Any, Union
 from enum import Enum
-from collections import deque, OrderedDict
-from concurrent.futures import (
-    ThreadPoolExecutor, ProcessPoolExecutor, as_completed, Future
+from contextlib import asynccontextmanager
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from functools import wraps
+from io import StringIO
+
+# FastAPI & Related
+from fastapi import (
+    FastAPI, HTTPException, Depends, Request, Response,
+    Query, Path, Body, Form, status, BackgroundTasks,
+    WebSocket, WebSocketDisconnect
 )
-from functools import wraps, lru_cache
-import multiprocessing as mp
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
-# --- Third-party imports with graceful fallback ---
+# SQLAlchemy
+from sqlalchemy import (
+    create_engine, Column, Integer, String, Text, Boolean,
+    Float, DateTime, ForeignKey, Enum as SAEnum, Index,
+    UniqueConstraint, func, and_, or_, desc, asc, JSON,
+    BigInteger, SmallInteger, Date, Numeric, event, inspect
+)
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import (
+    sessionmaker, relationship, Session, joinedload, selectinload
+)
+from sqlalchemy.pool import QueuePool
+from sqlalchemy.dialects.postgresql import UUID as PGUUID, JSONB, ARRAY
+
+# Pydantic
+from pydantic import (
+    BaseModel, Field, validator, EmailStr, HttpUrl, constr, conint
+)
+
+# Auth & Security
+import jwt
+from passlib.context import CryptContext
+
+# HTTP Client for monitoring
+import httpx
+
+# Redis
 try:
-    import requests
-    from requests.adapters import HTTPAdapter
-    from urllib3.util.retry import Retry as URLRetry
-    HAS_REQUESTS = True
+    import redis
+    REDIS_AVAILABLE = True
 except ImportError:
-    HAS_REQUESTS = False
+    REDIS_AVAILABLE = False
 
+# Celery
 try:
-    from flask import (
-        Flask, render_template_string, request, jsonify,
-        send_file, redirect, url_for, Response, stream_with_context
+    from celery import Celery
+    from celery.schedules import crontab
+    CELERY_AVAILABLE = True
+except ImportError:
+    CELERY_AVAILABLE = False
+
+# =============================================================================
+# SECTION 1: CONFIGURATION
+# =============================================================================
+
+class Settings:
+    """Application configuration with environment variable support."""
+
+    # Application
+    APP_NAME: str = "NeonWatch - God Level Uptime Monitor"
+    APP_VERSION: str = "1.0.0"
+    APP_DESCRIPTION: str = "Khatarnak Uptime Monitoring SaaS"
+    DEBUG: bool = os.getenv("DEBUG", "true").lower() == "true"
+    SECRET_KEY: str = os.getenv("SECRET_KEY", "neon-pink-purple-ultra-secret-key-2024-khatarnak")
+    JWT_ALGORITHM: str = "HS256"
+    JWT_EXPIRATION_HOURS: int = 72
+
+    # Database
+    DATABASE_URL: str = os.getenv(
+        "DATABASE_URL",
+        "sqlite:///./neonwatch.db"
     )
-    HAS_FLASK = True
-except ImportError:
-    HAS_FLASK = False
-
-try:
-    from bs4 import BeautifulSoup, Comment
-    HAS_BS4 = True
-except ImportError:
-    HAS_BS4 = False
-
-try:
-    import chardet
-    HAS_CHARDET = True
-except ImportError:
-    HAS_CHARDET = False
-
-try:
-    import psutil
-    HAS_PSUTIL = True
-except ImportError:
-    HAS_PSUTIL = False
-
-try:
-    from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
-    HAS_PLAYWRIGHT = True
-except ImportError:
-    HAS_PLAYWRIGHT = False
-
-try:
-    import cloudscraper
-    HAS_CLOUDSCRAPER = True
-except ImportError:
-    HAS_CLOUDSCRAPER = False
-
-try:
-    import ebooklib
-    from ebooklib import epub
-    HAS_EPUB = True
-except ImportError:
-    HAS_EPUB = False
-
-import random
-import queue
-
-# ============================================================
-# CONFIGURATION
-# ============================================================
-
-BASE_DIR = Path(__file__).parent.resolve()
-DATA_DIR = BASE_DIR / "scraper_data"
-JOBS_DIR = DATA_DIR / "jobs"
-LOGS_DIR = DATA_DIR / "logs"
-OUTPUT_DIR = DATA_DIR / "output"
-STATE_DIR = DATA_DIR / "state"
-COOKIE_DIR = DATA_DIR / "cookies"
-
-for d in [DATA_DIR, JOBS_DIR, LOGS_DIR, OUTPUT_DIR, STATE_DIR, COOKIE_DIR]:
-    d.mkdir(parents=True, exist_ok=True)
-
-
-class Config:
-    """Global configuration with environment override support."""
-    SECRET_KEY = os.environ.get("SCRAPER_SECRET", "novel-scraper-secret-key-2024")
-    MAX_WORKERS = min(int(os.environ.get("MAX_WORKERS", "10")), 15)
-    MAX_CHAPTERS = int(os.environ.get("MAX_CHAPTERS", "50000"))
-    MAX_RETRIES = int(os.environ.get("MAX_RETRIES", "5"))
-    REQUEST_TIMEOUT = int(os.environ.get("REQUEST_TIMEOUT", "30"))
-    BROWSER_TIMEOUT = int(os.environ.get("BROWSER_TIMEOUT", "45000"))
-    MIN_DELAY = float(os.environ.get("MIN_DELAY", "0.3"))
-    MAX_DELAY = float(os.environ.get("MAX_DELAY", "3.0"))
-    RATE_LIMIT_PAUSE = int(os.environ.get("RATE_LIMIT_PAUSE", "30"))
-    MAX_LOG_LINES = int(os.environ.get("MAX_LOG_LINES", "5000"))
-    CHUNK_SIZE = int(os.environ.get("CHUNK_SIZE", "50"))
-    CPU_COUNT = min(mp.cpu_count(), 15)
-    RAM_LIMIT_MB = int(os.environ.get("RAM_LIMIT_MB", "8192"))
-    PORT = int(os.environ.get("PORT", "5000"))
-    HOST = os.environ.get("HOST", "0.0.0.0")
-    DEBUG = os.environ.get("DEBUG", "false").lower() == "true"
-
-
-# ============================================================
-# LOGGING SYSTEM
-# ============================================================
-
-class BoundedMemoryHandler(logging.Handler):
-    """Keeps last N log records in memory for dashboard."""
-    def __init__(self, capacity=5000):
-        super().__init__()
-        self.capacity = capacity
-        self.buffer = deque(maxlen=capacity)
-        self.lock_obj = threading.Lock()
-
-    def emit(self, record):
-        with self.lock_obj:
-            self.buffer.append(self.format(record))
-
-    def get_logs(self, n=200):
-        with self.lock_obj:
-            return list(self.buffer)[-n:]
-
-    def clear(self):
-        with self.lock_obj:
-            self.buffer.clear()
-
-
-def setup_logging():
-    logger = logging.getLogger("NovelScraper")
-    logger.setLevel(logging.DEBUG)
-    logger.handlers.clear()
-
-    fmt = logging.Formatter(
-        "[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S"
+    POSTGRES_URL: str = os.getenv(
+        "POSTGRES_URL",
+        "postgresql://postgres:postgres@localhost:5432/neonwatch"
     )
 
-    fh = logging.FileHandler(LOGS_DIR / "scraper.log", encoding="utf-8")
-    fh.setLevel(logging.DEBUG)
-    fh.setFormatter(fmt)
-    logger.addHandler(fh)
+    # Redis
+    REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
-    ch = logging.StreamHandler()
-    ch.setLevel(logging.INFO)
-    ch.setFormatter(fmt)
-    logger.addHandler(ch)
+    # Celery
+    CELERY_BROKER_URL: str = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/1")
+    CELERY_RESULT_BACKEND: str = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/2")
 
-    mem_handler = BoundedMemoryHandler(Config.MAX_LOG_LINES)
-    mem_handler.setLevel(logging.DEBUG)
-    mem_handler.setFormatter(fmt)
-    logger.addHandler(mem_handler)
+    # Email
+    SMTP_HOST: str = os.getenv("SMTP_HOST", "smtp.gmail.com")
+    SMTP_PORT: int = int(os.getenv("SMTP_PORT", "587"))
+    SMTP_USER: str = os.getenv("SMTP_USER", "")
+    SMTP_PASSWORD: str = os.getenv("SMTP_PASSWORD", "")
+    FROM_EMAIL: str = os.getenv("FROM_EMAIL", "noreply@neonwatch.io")
 
-    return logger, mem_handler
+    # Monitoring defaults
+    DEFAULT_CHECK_INTERVAL: int = 300  # 5 minutes
+    HTTP_TIMEOUT: int = 30
+    MAX_MONITORS_FREE: int = 10
+    MAX_MONITORS_PRO: int = 100
 
-
-logger, memory_log_handler = setup_logging()
-
-
-# ============================================================
-# ENUMS AND DATA CLASSES
-# ============================================================
-
-class JobStatus(Enum):
-    PENDING = "pending"
-    RUNNING = "running"
-    PAUSED = "paused"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    CANCELLED = "cancelled"
-    RESUMING = "resuming"
+    # Theme defaults
+    DEFAULT_BG_VIDEO: str = ""
+    DEFAULT_BG_MUSIC: str = ""
+    DEFAULT_LOGO: str = ""
+    DEFAULT_PRIMARY_COLOR: str = "#F806CC"
+    DEFAULT_SECONDARY_COLOR: str = "#2E0249"
 
 
-class FetchMode(Enum):
+settings = Settings()
+
+# =============================================================================
+# SECTION 2: LOGGING CONFIGURATION
+# =============================================================================
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger("NeonWatch")
+
+# =============================================================================
+# SECTION 3: DATABASE ENGINE & SESSION
+# =============================================================================
+
+USE_POSTGRES = "postgresql" in settings.DATABASE_URL
+
+engine = create_engine(
+    settings.DATABASE_URL,
+    pool_pre_ping=True,
+    echo=settings.DEBUG,
+    **({"pool_size": 20, "max_overflow": 30, "pool_recycle": 3600}
+       if USE_POSTGRES else {"connect_args": {"check_same_thread": False}})
+)
+
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+
+def get_db():
+    """Dependency: yields a database session."""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+# =============================================================================
+# SECTION 4: REDIS CONNECTION
+# =============================================================================
+
+redis_client = None
+if REDIS_AVAILABLE:
+    try:
+        redis_client = redis.Redis.from_url(
+            settings.REDIS_URL, decode_responses=True, socket_timeout=5
+        )
+        redis_client.ping()
+        logger.info("✅ Redis connected successfully")
+    except Exception as e:
+        logger.warning(f"⚠️ Redis unavailable: {e}. Using in-memory fallback.")
+        redis_client = None
+
+# In-memory fallback cache
+_memory_cache: Dict[str, Any] = {}
+
+
+def cache_set(key: str, value: Any, ttl: int = 300):
+    """Set cache value with TTL."""
+    if redis_client:
+        redis_client.setex(key, ttl, json.dumps(value))
+    else:
+        _memory_cache[key] = {
+            "value": value,
+            "expires": time.time() + ttl
+        }
+
+
+def cache_get(key: str) -> Optional[Any]:
+    """Get cached value."""
+    if redis_client:
+        val = redis_client.get(key)
+        return json.loads(val) if val else None
+    else:
+        entry = _memory_cache.get(key)
+        if entry and entry["expires"] > time.time():
+            return entry["value"]
+        elif entry:
+            del _memory_cache[key]
+        return None
+
+
+def cache_delete(key: str):
+    """Delete cache entry."""
+    if redis_client:
+        redis_client.delete(key)
+    else:
+        _memory_cache.pop(key, None)
+
+
+# =============================================================================
+# SECTION 5: PASSWORD HASHING & JWT UTILITIES
+# =============================================================================
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+security_scheme = HTTPBearer(auto_error=False)
+
+
+def hash_password(password: str) -> str:
+    """Hash a plaintext password."""
+    return pwd_context.hash(password)
+
+
+def verify_password(plain: str, hashed: str) -> bool:
+    """Verify a plaintext password against its hash."""
+    return pwd_context.verify(plain, hashed)
+
+
+def create_jwt_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
+    """Create a JWT token."""
+    to_encode = data.copy()
+    expire = datetime.now(timezone.utc) + (
+        expires_delta or timedelta(hours=settings.JWT_EXPIRATION_HOURS)
+    )
+    to_encode.update({"exp": expire, "iat": datetime.now(timezone.utc)})
+    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+
+
+def decode_jwt_token(token: str) -> Optional[dict]:
+    """Decode and validate a JWT token."""
+    try:
+        payload = jwt.decode(
+            token, settings.SECRET_KEY, algorithms=[settings.JWT_ALGORITHM]
+        )
+        return payload
+    except jwt.ExpiredSignatureError:
+        return None
+    except jwt.InvalidTokenError:
+        return None
+
+
+# =============================================================================
+# SECTION 6: DATABASE MODELS (SQLAlchemy ORM)
+# =============================================================================
+
+class MonitorType(str, Enum):
     HTTP = "http"
-    CLOUDSCRAPER = "cloudscraper"
-    BROWSER = "browser"
-    SLOW = "slow"
+    HTTPS = "https"
+    PING = "ping"
+    PORT = "port"
+    KEYWORD = "keyword"
 
 
-class ScrapeMode(Enum):
-    PATTERN = "pattern"
-    SMART = "smart"
+class MonitorStatus(str, Enum):
+    UP = "up"
+    DOWN = "down"
+    PENDING = "pending"
+    PAUSED = "paused"
+    UNKNOWN = "unknown"
 
 
-@dataclass
-class ChapterResult:
-    chapter_number: int
-    url: str
-    title: str = ""
-    content: str = ""
-    status: str = "pending"
-    response_code: int = 0
-    response_time: float = 0.0
-    retry_count: int = 0
-    mode_used: str = ""
-    content_size: int = 0
-    cleaned_size: int = 0
-    error_type: str = ""
-    error_message: str = ""
-    fetch_start_time: float = 0.0
-    fetch_end_time: float = 0.0
-    encoding_used: str = ""
-
-    def to_dict(self):
-        return asdict(self)
+class UserRole(str, Enum):
+    USER = "user"
+    ADMIN = "admin"
+    SUPERADMIN = "superadmin"
 
 
-@dataclass
-class JobConfig:
-    job_id: str = ""
-    url_pattern: str = ""
-    start_chapter: int = 1
-    end_chapter: int = 100
-    scrape_mode: str = "pattern"
-    content_selector: str = ""
-    title_selector: str = ""
-    next_button_selector: str = ""
-    start_url: str = ""
-    max_workers: int = 5
-    delay_min: float = 0.5
-    delay_max: float = 2.0
-    output_format: str = "single_txt"
-    novel_name: str = "Novel"
-    login_url: str = ""
-    login_user: str = ""
-    login_pass: str = ""
-    cookies_json: str = ""
-    use_browser: bool = False
-    auto_detect_encoding: bool = True
-    remove_watermark: bool = True
-    created_at: str = ""
-
-    def to_dict(self):
-        return asdict(self)
+class UserPlan(str, Enum):
+    FREE = "free"
+    PRO = "pro"
+    ENTERPRISE = "enterprise"
 
 
-@dataclass
-class JobState:
-    job_id: str
-    config: JobConfig
-    status: JobStatus = JobStatus.PENDING
-    chapters: Dict[int, ChapterResult] = field(default_factory=dict)
-    completed_count: int = 0
-    failed_count: int = 0
-    skipped_count: int = 0
-    total_chapters: int = 0
-    start_time: float = 0.0
-    end_time: float = 0.0
-    current_delay: float = 1.0
-    active_threads: int = 0
-    avg_response_time: float = 0.0
-    current_speed: float = 0.0
-    estimated_eta: str = ""
-    error_log: List[str] = field(default_factory=list)
-    last_successful_chapter: int = 0
-    output_files: List[str] = field(default_factory=list)
+class AlertType(str, Enum):
+    EMAIL = "email"
+    WEBHOOK = "webhook"
+    SLACK = "slack"
+    DISCORD = "discord"
+    TELEGRAM = "telegram"
+
+
+# ---- User Model ----
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    uid = Column(String(36), unique=True, default=lambda: str(uuid.uuid4()), nullable=False)
+    username = Column(String(64), unique=True, nullable=False, index=True)
+    email = Column(String(255), unique=True, nullable=False, index=True)
+    password_hash = Column(String(255), nullable=False)
+    full_name = Column(String(128), nullable=True)
+    avatar_url = Column(Text, nullable=True)
+    role = Column(String(20), default=UserRole.USER.value, nullable=False)
+    plan = Column(String(20), default=UserPlan.FREE.value, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    is_banned = Column(Boolean, default=False, nullable=False)
+    ban_reason = Column(Text, nullable=True)
+    email_verified = Column(Boolean, default=False, nullable=False)
+    timezone = Column(String(64), default="UTC")
+    notification_email = Column(String(255), nullable=True)
+    webhook_url = Column(Text, nullable=True)
+    slack_webhook = Column(Text, nullable=True)
+    discord_webhook = Column(Text, nullable=True)
+    telegram_chat_id = Column(String(64), nullable=True)
+    api_key = Column(String(64), unique=True, default=lambda: str(uuid.uuid4()).replace("-", ""))
+    max_monitors = Column(Integer, default=10)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_login = Column(DateTime, nullable=True)
+
+    # Relationships
+    monitors = relationship("Monitor", back_populates="owner", cascade="all, delete-orphan")
+    alert_contacts = relationship("AlertContact", back_populates="owner", cascade="all, delete-orphan")
+    status_pages = relationship("StatusPage", back_populates="owner", cascade="all, delete-orphan")
 
     def to_dict(self):
-        d = {
-            "job_id": self.job_id,
-            "config": self.config.to_dict(),
-            "status": self.status.value,
-            "completed_count": self.completed_count,
-            "failed_count": self.failed_count,
-            "skipped_count": self.skipped_count,
-            "total_chapters": self.total_chapters,
-            "start_time": self.start_time,
-            "end_time": self.end_time,
-            "current_delay": self.current_delay,
-            "active_threads": self.active_threads,
+        return {
+            "id": self.id,
+            "uid": self.uid,
+            "username": self.username,
+            "email": self.email,
+            "full_name": self.full_name,
+            "avatar_url": self.avatar_url,
+            "role": self.role,
+            "plan": self.plan,
+            "is_active": self.is_active,
+            "is_banned": self.is_banned,
+            "ban_reason": self.ban_reason,
+            "email_verified": self.email_verified,
+            "timezone": self.timezone,
+            "max_monitors": self.max_monitors,
+            "api_key": self.api_key,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "last_login": self.last_login.isoformat() if self.last_login else None,
+            "monitor_count": len(self.monitors) if self.monitors else 0,
+        }
+
+
+# ---- Monitor Model ----
+class Monitor(Base):
+    __tablename__ = "monitors"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    uid = Column(String(36), unique=True, default=lambda: str(uuid.uuid4()), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    name = Column(String(255), nullable=False)
+    url = Column(Text, nullable=False)
+    monitor_type = Column(String(20), default=MonitorType.HTTP.value, nullable=False)
+    status = Column(String(20), default=MonitorStatus.PENDING.value, nullable=False)
+    check_interval = Column(Integer, default=300, nullable=False)  # seconds
+    timeout = Column(Integer, default=30, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+
+    # HTTP specific
+    http_method = Column(String(10), default="GET")
+    http_headers = Column(Text, nullable=True)  # JSON string
+    http_body = Column(Text, nullable=True)
+    expected_status_code = Column(Integer, default=200)
+    follow_redirects = Column(Boolean, default=True)
+    verify_ssl = Column(Boolean, default=True)
+
+    # Keyword specific
+    keyword = Column(String(500), nullable=True)
+    keyword_should_exist = Column(Boolean, default=True)
+
+    # Port specific
+    port = Column(Integer, nullable=True)
+
+    # Results tracking
+    last_check_at = Column(DateTime, nullable=True)
+    last_status_change = Column(DateTime, nullable=True)
+    last_response_time = Column(Float, nullable=True)  # milliseconds
+    current_uptime_streak = Column(Integer, default=0)  # seconds
+    total_checks = Column(Integer, default=0)
+    total_up = Column(Integer, default=0)
+    total_down = Column(Integer, default=0)
+    uptime_percentage = Column(Float, default=100.0)
+
+    # SSL monitoring
+    ssl_expiry_date = Column(DateTime, nullable=True)
+    ssl_days_remaining = Column(Integer, nullable=True)
+
+    # Alert settings per monitor
+    alert_on_down = Column(Boolean, default=True)
+    alert_on_recovery = Column(Boolean, default=True)
+    alert_threshold = Column(Integer, default=1)  # consecutive failures before alert
+    consecutive_failures = Column(Integer, default=0)
+
+    # Metadata
+    tags = Column(Text, nullable=True)  # JSON array
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    owner = relationship("User", back_populates="monitors")
+    logs = relationship("MonitorLog", back_populates="monitor", cascade="all, delete-orphan",
+                         order_by="desc(MonitorLog.created_at)")
+    daily_stats = relationship("DailyStats", back_populates="monitor", cascade="all, delete-orphan")
+    incidents = relationship("Incident", back_populates="monitor", cascade="all, delete-orphan")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "uid": self.uid,
+            "user_id": self.user_id,
+            "name": self.name,
+            "url": self.url,
+            "monitor_type": self.monitor_type,
+            "status": self.status,
+            "check_interval": self.check_interval,
+            "timeout": self.timeout,
+            "is_active": self.is_active,
+            "http_method": self.http_method,
+            "expected_status_code": self.expected_status_code,
+            "keyword": self.keyword,
+            "keyword_should_exist": self.keyword_should_exist,
+            "port": self.port,
+            "last_check_at": self.last_check_at.isoformat() if self.last_check_at else None,
+            "last_response_time": self.last_response_time,
+            "total_checks": self.total_checks,
+            "total_up": self.total_up,
+            "total_down": self.total_down,
+            "uptime_percentage": self.uptime_percentage,
+            "ssl_expiry_date": self.ssl_expiry_date.isoformat() if self.ssl_expiry_date else None,
+            "ssl_days_remaining": self.ssl_days_remaining,
+            "alert_on_down": self.alert_on_down,
+            "alert_on_recovery": self.alert_on_recovery,
+            "alert_threshold": self.alert_threshold,
+            "consecutive_failures": self.consecutive_failures,
+            "tags": json.loads(self.tags) if self.tags else [],
+            "notes": self.notes,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+# ---- Monitor Log Model ----
+class MonitorLog(Base):
+    __tablename__ = "monitor_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    monitor_id = Column(Integer, ForeignKey("monitors.id", ondelete="CASCADE"), nullable=False, index=True)
+    status = Column(String(20), nullable=False)
+    response_time = Column(Float, nullable=True)  # milliseconds
+    status_code = Column(Integer, nullable=True)
+    response_body_snippet = Column(Text, nullable=True)  # first 500 chars
+    error_message = Column(Text, nullable=True)
+    ip_address = Column(String(45), nullable=True)
+    ssl_valid = Column(Boolean, nullable=True)
+    content_length = Column(Integer, nullable=True)
+    headers_snapshot = Column(Text, nullable=True)  # JSON
+    check_region = Column(String(50), default="us-east-1")
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    # Relationships
+    monitor = relationship("Monitor", back_populates="logs")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "monitor_id": self.monitor_id,
+            "status": self.status,
+            "response_time": self.response_time,
+            "status_code": self.status_code,
+            "error_message": self.error_message,
+            "ip_address": self.ip_address,
+            "ssl_valid": self.ssl_valid,
+            "content_length": self.content_length,
+            "check_region": self.check_region,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ---- Daily Stats Model ----
+class DailyStats(Base):
+    __tablename__ = "daily_stats"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    monitor_id = Column(Integer, ForeignKey("monitors.id", ondelete="CASCADE"), nullable=False, index=True)
+    date = Column(Date, nullable=False, index=True)
+    total_checks = Column(Integer, default=0)
+    up_checks = Column(Integer, default=0)
+    down_checks = Column(Integer, default=0)
+    uptime_percentage = Column(Float, default=100.0)
+    avg_response_time = Column(Float, nullable=True)
+    min_response_time = Column(Float, nullable=True)
+    max_response_time = Column(Float, nullable=True)
+    incidents_count = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint('monitor_id', 'date', name='uq_monitor_date'),
+    )
+
+    # Relationships
+    monitor = relationship("Monitor", back_populates="daily_stats")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "monitor_id": self.monitor_id,
+            "date": self.date.isoformat() if self.date else None,
+            "total_checks": self.total_checks,
+            "up_checks": self.up_checks,
+            "down_checks": self.down_checks,
+            "uptime_percentage": self.uptime_percentage,
             "avg_response_time": self.avg_response_time,
-            "current_speed": self.current_speed,
-            "estimated_eta": self.estimated_eta,
-            "last_successful_chapter": self.last_successful_chapter,
-            "output_files": self.output_files,
-            "error_log": self.error_log[-50:],
-            "chapters_summary": {
-                "total": self.total_chapters,
-                "completed": self.completed_count,
-                "failed": self.failed_count,
-                "pending": self.total_chapters - self.completed_count - self.failed_count - self.skipped_count
-            }
+            "min_response_time": self.min_response_time,
+            "max_response_time": self.max_response_time,
+            "incidents_count": self.incidents_count,
         }
-        return d
 
 
-# ============================================================
-# USER-AGENT ROTATION
-# ============================================================
+# ---- Incident Model ----
+class Incident(Base):
+    __tablename__ = "incidents"
 
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 Edg/122.0.0.0",
-    "Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:125.0) Gecko/20100101 Firefox/125.0",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:124.0) Gecko/20100101 Firefox/124.0",
-]
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    uid = Column(String(36), unique=True, default=lambda: str(uuid.uuid4()))
+    monitor_id = Column(Integer, ForeignKey("monitors.id", ondelete="CASCADE"), nullable=False, index=True)
+    started_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    resolved_at = Column(DateTime, nullable=True)
+    duration_seconds = Column(Integer, nullable=True)
+    cause = Column(Text, nullable=True)
+    is_resolved = Column(Boolean, default=False)
+    alert_sent = Column(Boolean, default=False)
+    recovery_alert_sent = Column(Boolean, default=False)
 
+    # Relationships
+    monitor = relationship("Monitor", back_populates="incidents")
 
-# ============================================================
-# ANTI-DETECTION ENGINE
-# ============================================================
-
-class AntiDetectionEngine:
-    """Handles all anti-detection, rotation, and bypass logic."""
-
-    def __init__(self):
-        self.lock = threading.Lock()
-        self.consecutive_blocks = 0
-        self.total_requests = 0
-        self.blocked_requests = 0
-        self.current_mode = FetchMode.HTTP
-        self.delay_multiplier = 1.0
-        self._session_cache: Dict[str, requests.Session] = {}
-
-    def get_headers(self, url: str, extra_headers: Optional[Dict] = None) -> Dict[str, str]:
-        parsed = urllib.parse.urlparse(url)
-        ua = random.choice(USER_AGENTS)
-        headers = {
-            "User-Agent": ua,
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8,en-US;q=0.7",
-            "Accept-Encoding": "gzip, deflate, br",
-            "Connection": "keep-alive",
-            "Upgrade-Insecure-Requests": "1",
-            "Sec-Fetch-Dest": "document",
-            "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-Site": "same-origin",
-            "Sec-Fetch-User": "?1",
-            "Cache-Control": "max-age=0",
-            "Referer": f"{parsed.scheme}://{parsed.netloc}/",
-            "DNT": "1",
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "uid": self.uid,
+            "monitor_id": self.monitor_id,
+            "started_at": self.started_at.isoformat() if self.started_at else None,
+            "resolved_at": self.resolved_at.isoformat() if self.resolved_at else None,
+            "duration_seconds": self.duration_seconds,
+            "cause": self.cause,
+            "is_resolved": self.is_resolved,
         }
-        if extra_headers:
-            headers.update(extra_headers)
-        return headers
-
-    def get_session(self, domain: str) -> requests.Session:
-        if not HAS_REQUESTS:
-            raise RuntimeError("requests library not installed")
-        with self.lock:
-            if domain not in self._session_cache:
-                session = requests.Session()
-                retry_strategy = URLRetry(
-                    total=3,
-                    backoff_factor=1,
-                    status_forcelist=[500, 502, 503, 504],
-                    allowed_methods=["GET", "POST"]
-                )
-                adapter = HTTPAdapter(
-                    max_retries=retry_strategy,
-                    pool_connections=20,
-                    pool_maxsize=20,
-                    pool_block=False
-                )
-                session.mount("http://", adapter)
-                session.mount("https://", adapter)
-                self._session_cache[domain] = session
-            return self._session_cache[domain]
-
-    def get_cloudscraper_session(self) -> Any:
-        if HAS_CLOUDSCRAPER:
-            scraper = cloudscraper.create_scraper(
-                browser={
-                    "browser": "chrome",
-                    "platform": "windows",
-                    "desktop": True,
-                }
-            )
-            return scraper
-        return None
-
-    def get_delay(self, base_min: float = 0.3, base_max: float = 2.0) -> float:
-        d = random.uniform(base_min, base_max) * self.delay_multiplier
-        # Add micro-jitter for human-like behavior
-        d += random.uniform(0.01, 0.15)
-        return min(d, 30.0)
-
-    def report_success(self):
-        with self.lock:
-            self.total_requests += 1
-            self.consecutive_blocks = 0
-            if self.delay_multiplier > 1.0:
-                self.delay_multiplier = max(1.0, self.delay_multiplier * 0.95)
-
-    def report_block(self, status_code: int = 0):
-        with self.lock:
-            self.total_requests += 1
-            self.blocked_requests += 1
-            self.consecutive_blocks += 1
-            # Increase delay on blocks
-            if self.consecutive_blocks >= 3:
-                self.delay_multiplier = min(self.delay_multiplier * 1.5, 10.0)
-            if self.consecutive_blocks >= 5:
-                self.delay_multiplier = min(self.delay_multiplier * 2.0, 15.0)
-
-    def should_switch_mode(self) -> Optional[FetchMode]:
-        with self.lock:
-            if self.consecutive_blocks >= 3 and self.current_mode == FetchMode.HTTP:
-                if HAS_CLOUDSCRAPER:
-                    self.current_mode = FetchMode.CLOUDSCRAPER
-                    return FetchMode.CLOUDSCRAPER
-                elif HAS_PLAYWRIGHT:
-                    self.current_mode = FetchMode.BROWSER
-                    return FetchMode.BROWSER
-            if self.consecutive_blocks >= 5 and self.current_mode == FetchMode.CLOUDSCRAPER:
-                if HAS_PLAYWRIGHT:
-                    self.current_mode = FetchMode.BROWSER
-                    return FetchMode.BROWSER
-            if self.consecutive_blocks >= 8:
-                self.current_mode = FetchMode.SLOW
-                return FetchMode.SLOW
-            return None
-
-    def reset_blocks(self):
-        with self.lock:
-            self.consecutive_blocks = 0
-            self.current_mode = FetchMode.HTTP
-            self.delay_multiplier = 1.0
-
-    def load_cookies(self, session: requests.Session, cookie_path: Path):
-        if cookie_path.exists():
-            try:
-                with open(cookie_path, "r", encoding="utf-8") as f:
-                    cookies = json.load(f)
-                for c in cookies:
-                    session.cookies.set(c.get("name", ""), c.get("value", ""), domain=c.get("domain", ""))
-                logger.info(f"Loaded {len(cookies)} cookies from {cookie_path}")
-            except Exception as e:
-                logger.warning(f"Failed to load cookies: {e}")
-
-    def save_cookies(self, session: requests.Session, cookie_path: Path):
-        try:
-            cookies = []
-            for c in session.cookies:
-                cookies.append({
-                    "name": c.name,
-                    "value": c.value,
-                    "domain": c.domain,
-                    "path": c.path,
-                })
-            with open(cookie_path, "w", encoding="utf-8") as f:
-                json.dump(cookies, f, indent=2)
-        except Exception as e:
-            logger.warning(f"Failed to save cookies: {e}")
-
-    def close_all(self):
-        for s in self._session_cache.values():
-            try:
-                s.close()
-            except Exception:
-                pass
-        self._session_cache.clear()
-
-
-# ============================================================
-# EXTRACTION ENGINE
-# ============================================================
-
-class ExtractionEngine:
-    """Intelligent content extraction with cleaning."""
-
-    JUNK_PATTERNS = [
-        re.compile(r'<script[\s\S]*?</script>', re.I),
-        re.compile(r'<style[\s\S]*?</style>', re.I),
-        re.compile(r'<iframe[\s\S]*?</iframe>', re.I),
-        re.compile(r'<noscript[\s\S]*?</noscript>', re.I),
-        re.compile(r'<!--[\s\S]*?-->', re.I),
-    ]
-
-    WATERMARK_PATTERNS = [
-        re.compile(r'(本章未完.*?点击下一页继续阅读)', re.I),
-        re.compile(r'(请记住本站域名.*?)(?:\n|$)', re.I),
-        re.compile(r'(手机版阅读网址.*?)(?:\n|$)', re.I),
-        re.compile(r'(最新章节.*?请关注.*?)(?:\n|$)', re.I),
-        re.compile(r'(www\.[a-zA-Z0-9]+\.(com|net|org|cc|me))', re.I),
-        re.compile(r'(http[s]?://\S+)', re.I),
-        re.compile(r'(笔趣阁|笔下文学|书迷楼|顶点小说)', re.I),
-        re.compile(r'(天才一秒记住.*?)(?:\n|$)', re.I),
-        re.compile(r'(喜欢.*?请大家收藏.*?)(?:\n|$)', re.I),
-        re.compile(r'(百度搜索.*?)(?:\n|$)', re.I),
-    ]
-
-    CONTENT_SELECTORS = [
-        "#content",
-        "#chaptercontent",
-        "#chapter-content",
-        "#booktxt",
-        "#booktext",
-        "#htmlContent",
-        "#TextContent",
-        "#text_content",
-        "#novel_content",
-        ".content",
-        ".chapter-content",
-        ".chapter_content",
-        ".booktext",
-        ".read-content",
-        ".readcontent",
-        ".novel-content",
-        ".text-content",
-        ".reader-content",
-        ".article-content",
-        ".entry-content",
-        "article .content",
-        "div.content",
-        "#reader .content",
-        ".box_con #content",
-        "#wrapper .content",
-    ]
-
-    TITLE_SELECTORS = [
-        "h1.chapter-title",
-        "h1.bookname",
-        ".chapter-title",
-        ".bookname",
-        "h1",
-        ".chapter_title",
-        "#chapter-title",
-        ".title",
-        "h2.title",
-        "h3.title",
-    ]
-
-    NEXT_SELECTORS = [
-        'a[rel="next"]',
-        'a:contains("下一章")',
-        'a:contains("下一页")',
-        'a:contains("Next")',
-        'a:contains("next chapter")',
-        '#next_url',
-        '#pager_next',
-        '.next a',
-        '.next-page a',
-        'a.next',
-        '#next',
-        '.bottem a:last-child',
-        '#linkNext',
-    ]
-
-    NAV_SELECTORS_TO_REMOVE = [
-        "header", "footer", "nav", ".nav", ".navbar",
-        ".header", ".footer", ".sidebar", ".ad", ".ads",
-        ".advertisement", ".social-share", ".comments",
-        ".comment-section", "#comments", ".pagination",
-        ".breadcrumb", ".bookmark", ".toolbar", ".menu",
-        "#header", "#footer", "#sidebar", "#nav",
-        ".read-nav", ".chapter-nav", ".page-nav",
-        "script", "style", "iframe", "noscript",
-    ]
-
-    def __init__(self):
-        self.content_selector_cache: Dict[str, str] = {}
-
-    def detect_encoding(self, raw_bytes: bytes) -> str:
-        """Detect encoding from raw bytes."""
-        # Check BOM
-        if raw_bytes[:3] == b'\xef\xbb\xbf':
-            return 'utf-8'
-        if raw_bytes[:2] in (b'\xff\xfe', b'\xfe\xff'):
-            return 'utf-16'
-
-        # Check meta tags
-        head = raw_bytes[:2048].decode('ascii', errors='ignore').lower()
-        meta_match = re.search(r'charset=["\']?([a-zA-Z0-9_-]+)', head)
-        if meta_match:
-            enc = meta_match.group(1).strip().lower()
-            enc_map = {'gb2312': 'gbk', 'gb18030': 'gbk'}
-            return enc_map.get(enc, enc)
-
-        # Use chardet
-        if HAS_CHARDET:
-            det = chardet.detect(raw_bytes[:10000])
-            if det and det.get('encoding') and det.get('confidence', 0) > 0.5:
-                enc = det['encoding'].lower()
-                if enc in ('gb2312', 'gb18030'):
-                    return 'gbk'
-                return enc
-
-        return 'utf-8'
-
-    def decode_content(self, raw_bytes: bytes, declared_encoding: str = '') -> Tuple[str, str]:
-        """Try multiple encodings to decode content."""
-        encodings_to_try = []
-        if declared_encoding:
-            encodings_to_try.append(declared_encoding)
-
-        detected = self.detect_encoding(raw_bytes)
-        if detected and detected not in encodings_to_try:
-            encodings_to_try.append(detected)
-
-        encodings_to_try.extend(['utf-8', 'gbk', 'gb2312', 'gb18030', 'big5', 'latin-1'])
-
-        for enc in encodings_to_try:
-            try:
-                text = raw_bytes.decode(enc)
-                # Verify it's not garbled by checking for common chars
-                if len(text) > 0:
-                    return text, enc
-            except (UnicodeDecodeError, LookupError):
-                continue
-
-        return raw_bytes.decode('utf-8', errors='replace'), 'utf-8-fallback'
-
-    def extract_content(self, html: str, url: str,
-                        content_selector: str = '',
-                        title_selector: str = '',
-                        remove_watermark: bool = True) -> Tuple[str, str]:
-        """Extract main content and title from HTML."""
-        if not HAS_BS4:
-            return self._fallback_extract(html), ""
-
-        soup = BeautifulSoup(html, 'html.parser')
-
-        # Extract title
-        title = self._extract_title(soup, title_selector)
-
-        # Extract content
-        content = self._extract_body(soup, url, content_selector)
-
-        # Clean content
-        content = self._clean_content(content, remove_watermark)
-
-        return title, content
-
-    def _extract_title(self, soup: BeautifulSoup, selector: str = '') -> str:
-        if selector:
-            el = soup.select_one(selector)
-            if el:
-                return el.get_text(strip=True)
-
-        for sel in self.TITLE_SELECTORS:
-            try:
-                el = soup.select_one(sel)
-                if el:
-                    text = el.get_text(strip=True)
-                    if 3 < len(text) < 200:
-                        return text
-            except Exception:
-                continue
-
-        title_tag = soup.find("title")
-        if title_tag:
-            text = title_tag.get_text(strip=True)
-            text = re.split(r'[-_|–—]', text)[0].strip()
-            if text:
-                return text
-
-        return ""
-
-    def _extract_body(self, soup: BeautifulSoup, url: str, selector: str = '') -> str:
-        domain = urllib.parse.urlparse(url).netloc
-
-        # Use provided selector first
-        if selector:
-            el = soup.select_one(selector)
-            if el:
-                self.content_selector_cache[domain] = selector
-                return self._element_to_text(el)
-
-        # Use cached selector for domain
-        if domain in self.content_selector_cache:
-            cached = self.content_selector_cache[domain]
-            el = soup.select_one(cached)
-            if el:
-                text = self._element_to_text(el)
-                if len(text) > 100:
-                    return text
-
-        # Try known selectors
-        for sel in self.CONTENT_SELECTORS:
-            try:
-                el = soup.select_one(sel)
-                if el:
-                    text = self._element_to_text(el)
-                    if len(text) > 100:
-                        self.content_selector_cache[domain] = sel
-                        return text
-            except Exception:
-                continue
-
-        # Auto-detect: find largest text block
-        return self._auto_detect_content(soup, domain)
-
-    def _auto_detect_content(self, soup: BeautifulSoup, domain: str) -> str:
-        """Find the DOM element with the most text content."""
-        # Remove known non-content elements
-        for sel in self.NAV_SELECTORS_TO_REMOVE:
-            for tag in soup.select(sel):
-                tag.decompose()
-
-        # Remove comments
-        for comment in soup.find_all(string=lambda t: isinstance(t, Comment)):
-            comment.extract()
-
-        best_el = None
-        best_len = 0
-
-        for tag in soup.find_all(['div', 'article', 'section', 'main', 'td']):
-            text = tag.get_text(separator='\n', strip=True)
-            # Filter: content should have substantial text
-            # and text density should be high
-            if len(text) > best_len and len(text) > 200:
-                # Check text density
-                html_len = len(str(tag))
-                if html_len > 0:
-                    density = len(text) / html_len
-                    if density > 0.15:
-                        best_el = tag
-                        best_len = len(text)
-
-        if best_el:
-            # Try to get a CSS selector for caching
-            if best_el.get('id'):
-                self.content_selector_cache[domain] = f"#{best_el['id']}"
-            elif best_el.get('class'):
-                cls = best_el['class'][0]
-                self.content_selector_cache[domain] = f".{cls}"
-            return self._element_to_text(best_el)
-
-        # Absolute fallback: get body text
-        body = soup.find('body')
-        if body:
-            return self._element_to_text(body)
-        return soup.get_text(separator='\n', strip=True)
-
-    def _element_to_text(self, el) -> str:
-        """Convert element to clean text, preserving paragraph structure."""
-        # Remove unwanted child elements
-        for sel in self.NAV_SELECTORS_TO_REMOVE:
-            for tag in el.select(sel):
-                tag.decompose()
-
-        # Convert <br> to newline
-        for br in el.find_all('br'):
-            br.replace_with('\n')
-
-        # Convert <p> to text with newlines
-        for p in el.find_all('p'):
-            p.insert_before('\n')
-            p.insert_after('\n')
-
-        text = el.get_text(separator='\n')
-        return text
-
-    def _clean_content(self, text: str, remove_watermark: bool = True) -> str:
-        """Clean extracted text content."""
-        if not text:
-            return ""
-
-        # Decode HTML entities
-        text = html_module.unescape(text)
-
-        # Remove watermarks
-        if remove_watermark:
-            for pattern in self.WATERMARK_PATTERNS:
-                text = pattern.sub('', text)
-
-        # Clean whitespace
-        lines = text.split('\n')
-        cleaned_lines = []
-        for line in lines:
-            line = line.strip()
-            # Remove lines that are just whitespace/special chars
-            if line and not re.match(r'^[\s\u3000\xa0·.…—\-_=+*#@!]+$', line):
-                # Normalize whitespace within line
-                line = re.sub(r'[\s\u3000\xa0]+', ' ', line).strip()
-                cleaned_lines.append(line)
-
-        # Remove consecutive duplicate lines
-        deduped = []
-        for line in cleaned_lines:
-            if not deduped or line != deduped[-1]:
-                deduped.append(line)
-
-        # Join with proper paragraph spacing
-        text = '\n\n'.join(deduped)
-
-        # Remove excessive newlines
-        text = re.sub(r'\n{3,}', '\n\n', text)
-
-        return text.strip()
-
-    def _fallback_extract(self, html: str) -> str:
-        """Fallback extraction without BeautifulSoup."""
-        # Remove scripts and styles
-        for pattern in self.JUNK_PATTERNS:
-            html = pattern.sub('', html)
-        # Remove tags
-        text = re.sub(r'<br\s*/?\s*>', '\n', html, flags=re.I)
-        text = re.sub(r'</p>', '\n', text, flags=re.I)
-        text = re.sub(r'<[^>]+>', '', text)
-        text = html_module.unescape(text)
-        return text.strip()
-
-    def find_next_url(self, html: str, current_url: str,
-                      next_selector: str = '') -> Optional[str]:
-        """Find the next chapter URL from current page."""
-        if not HAS_BS4:
-            return None
-
-        soup = BeautifulSoup(html, 'html.parser')
-
-        # Try provided selector
-        if next_selector:
-            el = soup.select_one(next_selector)
-            if el and el.get('href'):
-                return urllib.parse.urljoin(current_url, el['href'])
-
-        # Try standard selectors
-        for sel in self.NEXT_SELECTORS:
-            try:
-                if ':contains(' in sel:
-                    # Manual text search
-                    text_match = re.search(r':contains\("(.+?)"\)', sel)
-                    if text_match:
-                        search_text = text_match.group(1)
-                        for a in soup.find_all('a'):
-                            if search_text in (a.get_text() or ''):
-                                href = a.get('href', '')
-                                if href and href != '#' and 'javascript:' not in href:
-                                    return urllib.parse.urljoin(current_url, href)
-                else:
-                    el = soup.select_one(sel)
-                    if el and el.get('href'):
-                        href = el['href']
-                        if href and href != '#' and 'javascript:' not in href:
-                            return urllib.parse.urljoin(current_url, href)
-            except Exception:
-                continue
-
-        # Try rel="next"
-        next_link = soup.find('a', rel='next')
-        if next_link and next_link.get('href'):
-            return urllib.parse.urljoin(current_url, next_link['href'])
-
-        # Try link rel="next"
-        next_link = soup.find('link', rel='next')
-        if next_link and next_link.get('href'):
-            return urllib.parse.urljoin(current_url, next_link['href'])
-
-        # URL increment fallback
-        return self._try_url_increment(current_url)
-
-    def _try_url_increment(self, url: str) -> Optional[str]:
-        """Try to increment numeric part of URL."""
-        # Match patterns like /chapter-123.html or /123.html or /read/123/
-        patterns = [
-            (r'(/\d+)(\.html?)', lambda m: f"{int(m.group(1)[1:]) + 1}"),
-            (r'[-_](\d+)(\.html?)', lambda m: str(int(m.group(1)) + 1)),
-            (r'/(\d+)/?$', lambda m: str(int(m.group(1)) + 1)),
-        ]
-        for pattern, _ in patterns:
-            match = re.search(pattern, url)
-            if match:
-                num = re.search(r'\d+', match.group())
-                if num:
-                    old_num = num.group()
-                    new_num = str(int(old_num) + 1)
-                    # Preserve zero padding
-                    if old_num[0] == '0' and len(old_num) > 1:
-                        new_num = new_num.zfill(len(old_num))
-                    return url[:match.start() + url[match.start():].index(old_num)] + \
-                           new_num + \
-                           url[match.start() + url[match.start():].index(old_num) + len(old_num):]
-        return None
-
-
-# ============================================================
-# SESSION MANAGER (Login Support)
-# ============================================================
-
-class SessionManager:
-    """Handles login, session persistence, cookies."""
-
-    def __init__(self, anti_detection: AntiDetectionEngine):
-        self.anti_detection = anti_detection
-        self.logged_in_sessions: Dict[str, requests.Session] = {}
-
-    def login(self, session: requests.Session, login_url: str,
-              username: str, password: str, url: str) -> bool:
-        """Attempt to login to the site."""
-        if not login_url or not username:
-            return False
-
-        try:
-            logger.info(f"Attempting login at {login_url}")
-
-            # First, get the login page to find CSRF token and form fields
-            headers = self.anti_detection.get_headers(login_url)
-            resp = session.get(login_url, headers=headers, timeout=Config.REQUEST_TIMEOUT)
-
-            if not HAS_BS4:
-                logger.warning("BeautifulSoup not available for login form parsing")
-                return False
-
-            soup = BeautifulSoup(resp.text, 'html.parser')
-
-            # Find login form
-            form = soup.find('form', attrs={'method': re.compile(r'post', re.I)})
-            if not form:
-                form = soup.find('form')
-
-            if not form:
-                logger.warning("No login form found")
-                return False
-
-            # Extract form data
-            form_data = {}
-            action = form.get('action', login_url)
-            if not action.startswith('http'):
-                action = urllib.parse.urljoin(login_url, action)
-
-            # Get all hidden fields (CSRF tokens, etc)
-            for inp in form.find_all('input'):
-                name = inp.get('name', '')
-                if not name:
-                    continue
-                input_type = inp.get('type', 'text').lower()
-                value = inp.get('value', '')
-
-                if input_type == 'hidden':
-                    form_data[name] = value
-                elif input_type in ('text', 'email'):
-                    form_data[name] = username
-                elif input_type == 'password':
-                    form_data[name] = password
-
-            # If we couldn't find username/password fields, try common names
-            if not any(v == username for v in form_data.values()):
-                for field_name in ['username', 'user', 'email', 'account', 'login']:
-                    if field_name in [inp.get('name', '') for inp in form.find_all('input')]:
-                        form_data[field_name] = username
-                        break
-
-            if not any(v == password for v in form_data.values()):
-                for field_name in ['password', 'pass', 'pwd']:
-                    if field_name in [inp.get('name', '') for inp in form.find_all('input')]:
-                        form_data[field_name] = password
-                        break
-
-            # Submit
-            headers['Referer'] = login_url
-            headers['Content-Type'] = 'application/x-www-form-urlencoded'
-            resp = session.post(action, data=form_data, headers=headers,
-                                timeout=Config.REQUEST_TIMEOUT, allow_redirects=True)
-
-            # Check success
-            if resp.status_code in (200, 302, 303):
-                # Verify by checking if we can access the target page
-                domain = urllib.parse.urlparse(url).netloc
-                cookie_path = COOKIE_DIR / f"{domain}_cookies.json"
-                self.anti_detection.save_cookies(session, cookie_path)
-                self.logged_in_sessions[domain] = session
-                logger.info(f"Login successful for {domain}")
-                return True
-
-            logger.warning(f"Login may have failed: status {resp.status_code}")
-            return False
-
-        except Exception as e:
-            logger.error(f"Login error: {e}")
-            return False
-
-    def import_cookies(self, session: requests.Session, cookies_json: str, url: str):
-        """Import cookies from JSON string."""
-        try:
-            cookies = json.loads(cookies_json)
-            if isinstance(cookies, list):
-                for c in cookies:
-                    session.cookies.set(
-                        c.get('name', ''),
-                        c.get('value', ''),
-                        domain=c.get('domain', ''),
-                        path=c.get('path', '/')
-                    )
-            elif isinstance(cookies, dict):
-                for name, value in cookies.items():
-                    session.cookies.set(name, value)
-            domain = urllib.parse.urlparse(url).netloc
-            cookie_path = COOKIE_DIR / f"{domain}_cookies.json"
-            self.anti_detection.save_cookies(session, cookie_path)
-            logger.info(f"Imported cookies for {domain}")
-        except Exception as e:
-            logger.error(f"Cookie import error: {e}")
-
-
-# ============================================================
-# BROWSER ENGINE
-# ============================================================
-
-class BrowserEngine:
-    """Playwright-based browser for JS-rendered pages."""
-
-    def __init__(self):
-        self._pw = None
-        self._browser = None
-        self._lock = threading.Lock()
-
-    def _ensure_browser(self):
-        if not HAS_PLAYWRIGHT:
-            raise RuntimeError("Playwright not installed")
-        if self._browser is None:
-            with self._lock:
-                if self._browser is None:
-                    self._pw = sync_playwright().start()
-                    self._browser = self._pw.chromium.launch(
-                        headless=True,
-                        args=[
-                            '--no-sandbox',
-                            '--disable-setuid-sandbox',
-                            '--disable-dev-shm-usage',
-                            '--disable-blink-features=AutomationControlled',
-                            '--disable-extensions',
-                            '--disable-gpu',
-                            '--window-size=1920,1080',
-                        ]
-                    )
-
-    def fetch(self, url: str, timeout: int = 45000) -> Tuple[str, int]:
-        """Fetch page using headless browser."""
-        self._ensure_browser()
-        context = None
-        page = None
-        try:
-            context = self._browser.new_context(
-                viewport={"width": 1920, "height": 1080},
-                user_agent=random.choice(USER_AGENTS),
-                locale="zh-CN",
-                timezone_id="Asia/Shanghai",
-                java_script_enabled=True,
-            )
-            # Stealth patches
-            context.add_init_script("""
-                Object.defineProperty(navigator, 'webdriver', {get: () => false});
-                Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3]});
-                Object.defineProperty(navigator, 'languages', {get: () => ['zh-CN', 'zh', 'en']});
-                window.chrome = {runtime: {}};
-            """)
-            page = context.new_page()
-            resp = page.goto(url, wait_until="domcontentloaded", timeout=timeout)
-
-            # Wait for content to load
-            page.wait_for_timeout(2000)
-
-            # Try to wait for common content selectors
-            for sel in ['#content', '#chaptercontent', '.content', '.chapter-content', 'article']:
-                try:
-                    page.wait_for_selector(sel, timeout=3000)
-                    break
-                except Exception:
-                    continue
-
-            html = page.content()
-            status = resp.status if resp else 200
-            return html, status
-
-        except Exception as e:
-            logger.error(f"Browser fetch error for {url}: {e}")
-            raise
-        finally:
-            if page:
-                try:
-                    page.close()
-                except Exception:
-                    pass
-            if context:
-                try:
-                    context.close()
-                except Exception:
-                    pass
-
-    def close(self):
-        if self._browser:
-            try:
-                self._browser.close()
-            except Exception:
-                pass
-        if self._pw:
-            try:
-                self._pw.stop()
-            except Exception:
-                pass
-        self._browser = None
-        self._pw = None
-
-
-# ============================================================
-# SCRAPER ENGINE (Core)
-# ============================================================
-
-class ScraperEngine:
-    """Core scraping engine with multi-mode fetch and fallback chain."""
-
-    def __init__(self):
-        self.anti_detection = AntiDetectionEngine()
-        self.extraction = ExtractionEngine()
-        self.session_mgr = SessionManager(self.anti_detection)
-        self.browser_engine = BrowserEngine()
-        self._active = True
-
-    def fetch_page(self, url: str, job_config: JobConfig,
-                   force_mode: Optional[FetchMode] = None) -> Tuple[str, int, str, float]:
-        """
-        Fetch a page with fallback chain.
-        Returns: (html, status_code, mode_used, response_time)
-        """
-        modes_to_try = []
-
-        if force_mode:
-            modes_to_try.append(force_mode)
-        elif job_config.use_browser and HAS_PLAYWRIGHT:
-            modes_to_try.append(FetchMode.BROWSER)
-        else:
-            # Build fallback chain
-            current = self.anti_detection.current_mode
-            if current == FetchMode.HTTP:
-                modes_to_try = [FetchMode.HTTP]
-                if HAS_CLOUDSCRAPER:
-                    modes_to_try.append(FetchMode.CLOUDSCRAPER)
-                if HAS_PLAYWRIGHT:
-                    modes_to_try.append(FetchMode.BROWSER)
-                modes_to_try.append(FetchMode.SLOW)
-            elif current == FetchMode.CLOUDSCRAPER:
-                modes_to_try = [FetchMode.CLOUDSCRAPER]
-                if HAS_PLAYWRIGHT:
-                    modes_to_try.append(FetchMode.BROWSER)
-                modes_to_try.append(FetchMode.SLOW)
-            elif current == FetchMode.BROWSER:
-                modes_to_try = [FetchMode.BROWSER, FetchMode.SLOW]
-            else:
-                modes_to_try = [FetchMode.SLOW]
-
-        last_error = None
-        for mode in modes_to_try:
-            if not self._active:
-                raise InterruptedError("Scraper stopped")
-            try:
-                start = time.time()
-                html, status = self._fetch_with_mode(url, mode, job_config)
-                elapsed = time.time() - start
-
-                if status in (200, 301, 302):
-                    self.anti_detection.report_success()
-                    return html, status, mode.value, elapsed
-                elif status in (403, 429, 503):
-                    self.anti_detection.report_block(status)
-                    logger.warning(f"Blocked ({status}) on {url} with mode {mode.value}")
-                    # Check if should switch
-                    new_mode = self.anti_detection.should_switch_mode()
-                    if new_mode:
-                        logger.info(f"Switching to mode: {new_mode.value}")
-                    continue
-                else:
-                    return html, status, mode.value, elapsed
-            except Exception as e:
-                last_error = e
-                logger.warning(f"Fetch failed with mode {mode.value}: {e}")
-                continue
-
-        # All modes failed
-        if last_error:
-            raise last_error
-        raise RuntimeError(f"All fetch modes failed for {url}")
-
-    def _fetch_with_mode(self, url: str, mode: FetchMode,
-                         config: JobConfig) -> Tuple[str, int]:
-        domain = urllib.parse.urlparse(url).netloc
-
-        if mode == FetchMode.HTTP:
-            session = self.anti_detection.get_session(domain)
-            # Load cookies if available
-            cookie_path = COOKIE_DIR / f"{domain}_cookies.json"
-            self.anti_detection.load_cookies(session, cookie_path)
-
-            if config.cookies_json:
-                self.session_mgr.import_cookies(session, config.cookies_json, url)
-
-            headers = self.anti_detection.get_headers(url)
-            resp = session.get(url, headers=headers, timeout=Config.REQUEST_TIMEOUT,
-                               allow_redirects=True)
-
-            # Handle encoding
-            if config.auto_detect_encoding:
-                html, _ = self.extraction.decode_content(resp.content, resp.encoding or '')
-            else:
-                html = resp.text
-
-            self.anti_detection.save_cookies(session, cookie_path)
-            return html, resp.status_code
-
-        elif mode == FetchMode.CLOUDSCRAPER:
-            if not HAS_CLOUDSCRAPER:
-                raise RuntimeError("cloudscraper not installed")
-            scraper = self.anti_detection.get_cloudscraper_session()
-            headers = self.anti_detection.get_headers(url)
-            resp = scraper.get(url, headers=headers, timeout=Config.REQUEST_TIMEOUT)
-            if config.auto_detect_encoding:
-                html, _ = self.extraction.decode_content(resp.content, resp.encoding or '')
-            else:
-                html = resp.text
-            return html, resp.status_code
-
-        elif mode == FetchMode.BROWSER:
-            html, status = self.browser_engine.fetch(url, Config.BROWSER_TIMEOUT)
-            return html, status
-
-        elif mode == FetchMode.SLOW:
-            # Ultra slow mode - last resort
-            time.sleep(random.uniform(5, 10))
-            session = self.anti_detection.get_session(domain)
-            headers = self.anti_detection.get_headers(url)
-            resp = session.get(url, headers=headers, timeout=60, allow_redirects=True)
-            if config.auto_detect_encoding:
-                html, _ = self.extraction.decode_content(resp.content, resp.encoding or '')
-            else:
-                html = resp.text
-            return html, resp.status_code
-
-        raise ValueError(f"Unknown mode: {mode}")
-
-    def scrape_chapter(self, chapter_num: int, url: str,
-                       config: JobConfig) -> ChapterResult:
-        """Scrape a single chapter with full error handling and retry."""
-        result = ChapterResult(
-            chapter_number=chapter_num,
-            url=url,
-            fetch_start_time=time.time()
-        )
-
-        for attempt in range(Config.MAX_RETRIES):
-            if not self._active:
-                result.status = "cancelled"
-                return result
-
-            try:
-                html, status, mode, resp_time = self.fetch_page(url, config)
-                result.response_code = status
-                result.response_time = resp_time
-                result.mode_used = mode
-                result.retry_count = attempt
-
-                if status == 200:
-                    title, content = self.extraction.extract_content(
-                        html, url,
-                        content_selector=config.content_selector,
-                        title_selector=config.title_selector,
-                        remove_watermark=config.remove_watermark
-                    )
-                    result.title = title
-                    result.content = content
-                    result.content_size = len(html)
-                    result.cleaned_size = len(content)
-                    result.status = "success" if content else "empty"
-                    result.fetch_end_time = time.time()
-
-                    if not content:
-                        logger.warning(f"Chapter {chapter_num}: empty content from {url}")
-
-                    return result
-                elif status in (404,):
-                    result.status = "not_found"
-                    result.error_type = "404"
-                    return result
-                elif status in (403, 429, 503):
-                    result.error_type = str(status)
-                    # Exponential backoff
-                    wait = min(2 ** attempt * 2 + random.uniform(0, 2), 60)
-                    logger.warning(f"Chapter {chapter_num}: {status}, retry in {wait:.1f}s (attempt {attempt+1})")
-                    time.sleep(wait)
-                    continue
-                else:
-                    result.status = "error"
-                    result.error_type = f"http_{status}"
-                    return result
-
-            except InterruptedError:
-                result.status = "cancelled"
-                return result
-            except Exception as e:
-                result.error_type = type(e).__name__
-                result.error_message = str(e)[:500]
-                wait = min(2 ** attempt + random.uniform(0, 1), 30)
-                logger.error(f"Chapter {chapter_num} attempt {attempt+1} error: {e}")
-                if attempt < Config.MAX_RETRIES - 1:
-                    time.sleep(wait)
-
-        result.status = "failed"
-        result.fetch_end_time = time.time()
-        return result
-
-    def stop(self):
-        self._active = False
-
-    def resume(self):
-        self._active = True
-
-    def close(self):
-        self._active = False
-        self.anti_detection.close_all()
-        self.browser_engine.close()
-
-
-# ============================================================
-# OUTPUT MANAGER
-# ============================================================
-
-class OutputManager:
-    """Handles all output formats."""
+
+
+# ---- Alert Contact Model ----
+class AlertContact(Base):
+    __tablename__ = "alert_contacts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    name = Column(String(128), nullable=False)
+    alert_type = Column(String(20), nullable=False)  # email, webhook, slack, etc.
+    value = Column(Text, nullable=False)  # email address, webhook URL, etc.
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    owner = relationship("User", back_populates="alert_contacts")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "name": self.name,
+            "alert_type": self.alert_type,
+            "value": self.value,
+            "is_active": self.is_active,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ---- Status Page Model ----
+class StatusPage(Base):
+    __tablename__ = "status_pages"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    uid = Column(String(36), unique=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    slug = Column(String(128), unique=True, nullable=False)
+    title = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    monitor_ids = Column(Text, nullable=True)  # JSON array of monitor IDs
+    is_public = Column(Boolean, default=True)
+    custom_domain = Column(String(255), nullable=True)
+    show_uptime_chart = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    owner = relationship("User", back_populates="status_pages")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "uid": self.uid,
+            "slug": self.slug,
+            "title": self.title,
+            "description": self.description,
+            "monitor_ids": json.loads(self.monitor_ids) if self.monitor_ids else [],
+            "is_public": self.is_public,
+            "custom_domain": self.custom_domain,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ---- Site Config Model (SINGLETON - Super Admin CMS) ----
+class SiteConfig(Base):
+    __tablename__ = "site_config"
+
+    id = Column(Integer, primary_key=True, default=1)
+    site_name = Column(String(255), default="NeonWatch")
+    site_tagline = Column(String(500), default="God-Level Uptime Monitoring")
+    logo_url = Column(Text, default="")
+    favicon_url = Column(Text, default="")
+    bg_video_url = Column(Text, default="")
+    bg_music_url = Column(Text, default="")
+    primary_color_theme = Column(String(20), default="#F806CC")
+    secondary_color_theme = Column(String(20), default="#2E0249")
+    accent_color = Column(String(20), default="#A855F7")
+    glow_color = Column(String(20), default="#F806CC")
+    glassmorphism_opacity = Column(Float, default=0.15)
+    glassmorphism_blur = Column(Integer, default=20)
+    enable_particles = Column(Boolean, default=True)
+    enable_animations = Column(Boolean, default=True)
+    custom_css = Column(Text, default="")
+    custom_js = Column(Text, default="")
+    footer_text = Column(Text, default="© 2024 NeonWatch. All rights reserved.")
+    maintenance_mode = Column(Boolean, default=False)
+    maintenance_message = Column(Text, default="We'll be back soon!")
+    signup_enabled = Column(Boolean, default=True)
+    default_user_plan = Column(String(20), default="free")
+    max_free_monitors = Column(Integer, default=10)
+    max_pro_monitors = Column(Integer, default=100)
+    smtp_host = Column(String(255), default="")
+    smtp_port = Column(Integer, default=587)
+    smtp_user = Column(String(255), default="")
+    smtp_password = Column(String(255), default="")
+    from_email = Column(String(255), default="")
+    meta_title = Column(String(255), default="NeonWatch - Uptime Monitoring")
+    meta_description = Column(Text, default="God-level uptime monitoring SaaS")
+    og_image_url = Column(Text, default="")
+    google_analytics_id = Column(String(50), default="")
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "site_name": self.site_name,
+            "site_tagline": self.site_tagline,
+            "logo_url": self.logo_url,
+            "favicon_url": self.favicon_url,
+            "bg_video_url": self.bg_video_url,
+            "bg_music_url": self.bg_music_url,
+            "primary_color_theme": self.primary_color_theme,
+            "secondary_color_theme": self.secondary_color_theme,
+            "accent_color": self.accent_color,
+            "glow_color": self.glow_color,
+            "glassmorphism_opacity": self.glassmorphism_opacity,
+            "glassmorphism_blur": self.glassmorphism_blur,
+            "enable_particles": self.enable_particles,
+            "enable_animations": self.enable_animations,
+            "custom_css": self.custom_css,
+            "footer_text": self.footer_text,
+            "maintenance_mode": self.maintenance_mode,
+            "maintenance_message": self.maintenance_message,
+            "signup_enabled": self.signup_enabled,
+            "default_user_plan": self.default_user_plan,
+            "max_free_monitors": self.max_free_monitors,
+            "max_pro_monitors": self.max_pro_monitors,
+            "meta_title": self.meta_title,
+            "meta_description": self.meta_description,
+            "og_image_url": self.og_image_url,
+            "google_analytics_id": self.google_analytics_id,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+# ---- Audit Log Model ----
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, nullable=True)
+    action = Column(String(100), nullable=False)
+    target_type = Column(String(50), nullable=True)
+    target_id = Column(Integer, nullable=True)
+    details = Column(Text, nullable=True)
+    ip_address = Column(String(45), nullable=True)
+    user_agent = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "action": self.action,
+            "target_type": self.target_type,
+            "target_id": self.target_id,
+            "details": self.details,
+            "ip_address": self.ip_address,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# =============================================================================
+# SECTION 7: PYDANTIC SCHEMAS (Request/Response Models)
+# =============================================================================
+
+class UserRegisterSchema(BaseModel):
+    username: str = Field(..., min_length=3, max_length=64)
+    email: str = Field(..., max_length=255)
+    password: str = Field(..., min_length=8)
+    full_name: Optional[str] = None
+
+class UserLoginSchema(BaseModel):
+    login: str  # username or email
+    password: str
+
+class UserUpdateSchema(BaseModel):
+    full_name: Optional[str] = None
+    avatar_url: Optional[str] = None
+    timezone: Optional[str] = None
+    notification_email: Optional[str] = None
+    webhook_url: Optional[str] = None
+    slack_webhook: Optional[str] = None
+    discord_webhook: Optional[str] = None
+    telegram_chat_id: Optional[str] = None
+
+class MonitorCreateSchema(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    url: str = Field(...)
+    monitor_type: str = Field(default="http")
+    check_interval: int = Field(default=300, ge=60, le=86400)
+    timeout: int = Field(default=30, ge=5, le=120)
+    http_method: str = Field(default="GET")
+    http_headers: Optional[str] = None
+    http_body: Optional[str] = None
+    expected_status_code: int = Field(default=200)
+    follow_redirects: bool = True
+    verify_ssl: bool = True
+    keyword: Optional[str] = None
+    keyword_should_exist: bool = True
+    port: Optional[int] = None
+    alert_on_down: bool = True
+    alert_on_recovery: bool = True
+    alert_threshold: int = Field(default=1, ge=1, le=10)
+    tags: Optional[List[str]] = None
+    notes: Optional[str] = None
+
+class MonitorUpdateSchema(BaseModel):
+    name: Optional[str] = None
+    url: Optional[str] = None
+    monitor_type: Optional[str] = None
+    check_interval: Optional[int] = None
+    timeout: Optional[int] = None
+    is_active: Optional[bool] = None
+    http_method: Optional[str] = None
+    expected_status_code: Optional[int] = None
+    keyword: Optional[str] = None
+    keyword_should_exist: Optional[bool] = None
+    port: Optional[int] = None
+    alert_on_down: Optional[bool] = None
+    alert_on_recovery: Optional[bool] = None
+    alert_threshold: Optional[int] = None
+    tags: Optional[List[str]] = None
+    notes: Optional[str] = None
+
+class SiteConfigUpdateSchema(BaseModel):
+    site_name: Optional[str] = None
+    site_tagline: Optional[str] = None
+    logo_url: Optional[str] = None
+    favicon_url: Optional[str] = None
+    bg_video_url: Optional[str] = None
+    bg_music_url: Optional[str] = None
+    primary_color_theme: Optional[str] = None
+    secondary_color_theme: Optional[str] = None
+    accent_color: Optional[str] = None
+    glow_color: Optional[str] = None
+    glassmorphism_opacity: Optional[float] = None
+    glassmorphism_blur: Optional[int] = None
+    enable_particles: Optional[bool] = None
+    enable_animations: Optional[bool] = None
+    custom_css: Optional[str] = None
+    footer_text: Optional[str] = None
+    maintenance_mode: Optional[bool] = None
+    maintenance_message: Optional[str] = None
+    signup_enabled: Optional[bool] = None
+    max_free_monitors: Optional[int] = None
+    max_pro_monitors: Optional[int] = None
+    meta_title: Optional[str] = None
+    meta_description: Optional[str] = None
+    og_image_url: Optional[str] = None
+    google_analytics_id: Optional[str] = None
+
+class AlertContactSchema(BaseModel):
+    name: str
+    alert_type: str
+    value: str
+
+class StatusPageSchema(BaseModel):
+    slug: str = Field(..., min_length=3, max_length=128)
+    title: str
+    description: Optional[str] = None
+    monitor_ids: Optional[List[int]] = None
+    is_public: bool = True
+
+
+# =============================================================================
+# SECTION 8: AUTH DEPENDENCIES
+# =============================================================================
+
+async def get_current_user(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_scheme),
+    db: Session = Depends(get_db)
+) -> User:
+    """Extract and validate the current user from JWT."""
+    if not credentials:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    payload = decode_jwt_token(credentials.credentials)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    user_id = payload.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid token payload")
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    if user.is_banned:
+        raise HTTPException(status_code=403, detail=f"Account banned: {user.ban_reason or 'Contact admin'}")
+    if not user.is_active:
+        raise HTTPException(status_code=403, detail="Account deactivated")
+    return user
+
+
+async def require_admin(user: User = Depends(get_current_user)) -> User:
+    """Require admin or superadmin role."""
+    if user.role not in [UserRole.ADMIN.value, UserRole.SUPERADMIN.value]:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return user
+
+
+async def require_superadmin(user: User = Depends(get_current_user)) -> User:
+    """Require superadmin role."""
+    if user.role != UserRole.SUPERADMIN.value:
+        raise HTTPException(status_code=403, detail="Super Admin access required")
+    return user
+
+
+# =============================================================================
+# SECTION 9: MONITORING ENGINE - Core Check Functions
+# =============================================================================
+
+class MonitoringEngine:
+    """The core monitoring engine supporting HTTP, Ping, Port, Keyword checks."""
 
     @staticmethod
-    def safe_filename(name: str) -> str:
-        """Create a safe filename."""
-        name = unicodedata.normalize('NFKC', name)
-        name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', name)
-        name = name.strip('. ')
-        if not name:
-            name = "novel"
-        return name[:200]
-
-    def compile_output(self, job_state: JobState) -> List[str]:
-        """Compile all chapters into requested output format(s)."""
-        config = job_state.config
-        novel_name = self.safe_filename(config.novel_name or "Novel")
-        job_dir = OUTPUT_DIR / job_state.job_id
-        job_dir.mkdir(parents=True, exist_ok=True)
-
-        output_files = []
-        fmt = config.output_format
-
-        # Sort chapters
-        sorted_chapters = sorted(
-            [ch for ch in job_state.chapters.values() if ch.status == "success"],
-            key=lambda c: c.chapter_number
-        )
-
-        if not sorted_chapters:
-            logger.warning("No successful chapters to compile")
-            return []
-
-        if fmt in ("single_txt", "all"):
-            path = self._write_single_txt(sorted_chapters, job_dir, novel_name)
-            if path:
-                output_files.append(str(path))
-
-        if fmt in ("separate_files", "all"):
-            paths = self._write_separate_files(sorted_chapters, job_dir, novel_name)
-            output_files.extend([str(p) for p in paths])
-
-        if fmt in ("json", "all"):
-            path = self._write_json(sorted_chapters, job_dir, novel_name, job_state)
-            if path:
-                output_files.append(str(path))
-
-        if fmt in ("markdown", "all"):
-            path = self._write_markdown(sorted_chapters, job_dir, novel_name)
-            if path:
-                output_files.append(str(path))
-
-        if fmt in ("epub", "all") and HAS_EPUB:
-            path = self._write_epub(sorted_chapters, job_dir, novel_name)
-            if path:
-                output_files.append(str(path))
-
-        if fmt in ("zip", "all"):
-            path = self._write_zip(sorted_chapters, job_dir, novel_name)
-            if path:
-                output_files.append(str(path))
-
-        # Save metadata
-        meta_path = job_dir / f"{novel_name}_metadata.json"
-        meta = {
-            "novel_name": novel_name,
-            "total_chapters": len(sorted_chapters),
-            "scraped_date": datetime.now().isoformat(),
-            "job_id": job_state.job_id,
-            "source_pattern": config.url_pattern or config.start_url,
-            "chapters": [
-                {
-                    "number": ch.chapter_number,
-                    "title": ch.title,
-                    "url": ch.url,
-                    "size": ch.cleaned_size,
-                }
-                for ch in sorted_chapters
-            ]
+    async def check_http(monitor: Monitor) -> dict:
+        """Perform HTTP/HTTPS check."""
+        result = {
+            "status": MonitorStatus.DOWN.value,
+            "response_time": None,
+            "status_code": None,
+            "error_message": None,
+            "ip_address": None,
+            "ssl_valid": None,
+            "content_length": None,
+            "response_body_snippet": None,
+            "headers_snapshot": None,
         }
-        with open(meta_path, "w", encoding="utf-8") as f:
-            json.dump(meta, f, indent=2, ensure_ascii=False)
-        output_files.append(str(meta_path))
 
-        return output_files
-
-    def _write_single_txt(self, chapters, job_dir, name) -> Optional[Path]:
-        path = job_dir / f"{name}.txt"
-        try:
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(f"{'='*60}\n")
-                f.write(f"  {name}\n")
-                f.write(f"  Scraped: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write(f"  Total Chapters: {len(chapters)}\n")
-                f.write(f"{'='*60}\n\n")
-                for ch in chapters:
-                    title = ch.title or f"Chapter {ch.chapter_number}"
-                    f.write(f"\n{'─'*50}\n")
-                    f.write(f"  --- Chapter {ch.chapter_number}: {title} ---\n")
-                    f.write(f"{'─'*50}\n\n")
-                    f.write(ch.content or "[No content]")
-                    f.write("\n\n")
-            logger.info(f"Written single TXT: {path}")
-            return path
-        except Exception as e:
-            logger.error(f"Error writing TXT: {e}")
-            return None
-
-    def _write_separate_files(self, chapters, job_dir, name) -> List[Path]:
-        ch_dir = job_dir / f"{name}_chapters"
-        ch_dir.mkdir(exist_ok=True)
-        paths = []
-        for ch in chapters:
-            title = self.safe_filename(ch.title or f"Chapter_{ch.chapter_number}")
-            path = ch_dir / f"{ch.chapter_number:05d}_{title}.txt"
+        headers = {}
+        if monitor.http_headers:
             try:
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write(f"--- Chapter {ch.chapter_number}: {ch.title or ''} ---\n\n")
-                    f.write(ch.content or "[No content]")
-                paths.append(path)
-            except Exception as e:
-                logger.error(f"Error writing chapter file: {e}")
-        return paths
+                headers = json.loads(monitor.http_headers)
+            except json.JSONDecodeError:
+                pass
 
-    def _write_json(self, chapters, job_dir, name, job_state) -> Optional[Path]:
-        path = job_dir / f"{name}.json"
+        headers.setdefault("User-Agent", "NeonWatch/1.0 Uptime Monitor")
+
         try:
-            data = {
-                "novel_name": name,
-                "scraped_date": datetime.now().isoformat(),
-                "total_chapters": len(chapters),
-                "chapters": [
-                    {
-                        "number": ch.chapter_number,
-                        "title": ch.title,
-                        "url": ch.url,
-                        "content": ch.content,
-                        "content_length": ch.cleaned_size,
+            start = time.time()
+            async with httpx.AsyncClient(
+                timeout=monitor.timeout,
+                follow_redirects=monitor.follow_redirects,
+                verify=monitor.verify_ssl,
+            ) as client:
+                response = await client.request(
+                    method=monitor.http_method or "GET",
+                    url=monitor.url,
+                    headers=headers,
+                    content=monitor.http_body if monitor.http_body else None,
+                )
+            elapsed = (time.time() - start) * 1000  # Convert to milliseconds
+
+            result["response_time"] = round(elapsed, 2)
+            result["status_code"] = response.status_code
+            result["content_length"] = len(response.content)
+            result["response_body_snippet"] = response.text[:500] if response.text else None
+
+            resp_headers = dict(response.headers)
+            result["headers_snapshot"] = json.dumps(
+                {k: v for k, v in list(resp_headers.items())[:20]}
+            )
+
+            # Determine status
+            expected = monitor.expected_status_code or 200
+            if response.status_code == expected:
+                result["status"] = MonitorStatus.UP.value
+            elif 200 <= response.status_code < 400:
+                result["status"] = MonitorStatus.UP.value
+            else:
+                result["status"] = MonitorStatus.DOWN.value
+                result["error_message"] = f"Expected status {expected}, got {response.status_code}"
+
+            # SSL check for HTTPS
+            if monitor.url.startswith("https://"):
+                result["ssl_valid"] = True  # If we got here without error
+
+            # Resolve IP
+            try:
+                from urllib.parse import urlparse
+                parsed = urlparse(monitor.url)
+                hostname = parsed.hostname
+                if hostname:
+                    ip = socket.gethostbyname(hostname)
+                    result["ip_address"] = ip
+            except Exception:
+                pass
+
+        except httpx.TimeoutException:
+            result["error_message"] = f"Timeout after {monitor.timeout}s"
+            result["response_time"] = monitor.timeout * 1000
+        except httpx.ConnectError as e:
+            result["error_message"] = f"Connection error: {str(e)[:200]}"
+        except ssl.SSLError as e:
+            result["error_message"] = f"SSL error: {str(e)[:200]}"
+            result["ssl_valid"] = False
+        except Exception as e:
+            result["error_message"] = f"Error: {str(e)[:200]}"
+
+        return result
+
+    @staticmethod
+    async def check_keyword(monitor: Monitor) -> dict:
+        """Perform keyword check (HTTP + keyword search)."""
+        result = await MonitoringEngine.check_http(monitor)
+
+        if result["status"] == MonitorStatus.UP.value and monitor.keyword:
+            body = result.get("response_body_snippet", "") or ""
+            keyword_found = monitor.keyword.lower() in body.lower()
+
+            if monitor.keyword_should_exist and not keyword_found:
+                result["status"] = MonitorStatus.DOWN.value
+                result["error_message"] = f"Keyword '{monitor.keyword}' not found in response"
+            elif not monitor.keyword_should_exist and keyword_found:
+                result["status"] = MonitorStatus.DOWN.value
+                result["error_message"] = f"Keyword '{monitor.keyword}' found (should not exist)"
+
+        return result
+
+    @staticmethod
+    async def check_ping(monitor: Monitor) -> dict:
+        """Perform ping check using system ping command."""
+        result = {
+            "status": MonitorStatus.DOWN.value,
+            "response_time": None,
+            "error_message": None,
+            "ip_address": None,
+        }
+
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(monitor.url if "://" in monitor.url else f"http://{monitor.url}")
+            host = parsed.hostname or monitor.url
+
+            # Resolve hostname
+            try:
+                result["ip_address"] = socket.gethostbyname(host)
+            except socket.gaierror:
+                result["error_message"] = f"Cannot resolve hostname: {host}"
+                return result
+
+            # Use system ping
+            param = "-n" if platform.system().lower() == "windows" else "-c"
+            timeout_param = "-w" if platform.system().lower() == "windows" else "-W"
+
+            start = time.time()
+            process = await asyncio.create_subprocess_exec(
+                "ping", param, "1", timeout_param, str(min(monitor.timeout, 10)), host,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(), timeout=monitor.timeout
+            )
+            elapsed = (time.time() - start) * 1000
+
+            if process.returncode == 0:
+                result["status"] = MonitorStatus.UP.value
+                result["response_time"] = round(elapsed, 2)
+
+                output = stdout.decode()
+                time_match = re.search(r'time[=<](\d+\.?\d*)', output)
+                if time_match:
+                    result["response_time"] = float(time_match.group(1))
+            else:
+                result["error_message"] = "Host unreachable"
+
+        except asyncio.TimeoutError:
+            result["error_message"] = f"Ping timeout after {monitor.timeout}s"
+        except Exception as e:
+            result["error_message"] = f"Ping error: {str(e)[:200]}"
+
+        return result
+
+    @staticmethod
+    async def check_port(monitor: Monitor) -> dict:
+        """Perform TCP port check."""
+        result = {
+            "status": MonitorStatus.DOWN.value,
+            "response_time": None,
+            "error_message": None,
+            "ip_address": None,
+        }
+
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(monitor.url if "://" in monitor.url else f"http://{monitor.url}")
+            host = parsed.hostname or monitor.url
+            port = monitor.port or parsed.port or 80
+
+            try:
+                result["ip_address"] = socket.gethostbyname(host)
+            except socket.gaierror:
+                result["error_message"] = f"Cannot resolve hostname: {host}"
+                return result
+
+            start = time.time()
+            future = asyncio.open_connection(host, port)
+            reader, writer = await asyncio.wait_for(future, timeout=monitor.timeout)
+            elapsed = (time.time() - start) * 1000
+
+            result["status"] = MonitorStatus.UP.value
+            result["response_time"] = round(elapsed, 2)
+
+            writer.close()
+            await writer.wait_closed()
+
+        except asyncio.TimeoutError:
+            result["error_message"] = f"Port connection timeout after {monitor.timeout}s"
+        except ConnectionRefusedError:
+            result["error_message"] = f"Connection refused on port {monitor.port}"
+        except Exception as e:
+            result["error_message"] = f"Port check error: {str(e)[:200]}"
+
+        return result
+
+    @staticmethod
+    async def perform_check(monitor: Monitor) -> dict:
+        """Route to the appropriate check method based on monitor type."""
+        check_methods = {
+            MonitorType.HTTP.value: MonitoringEngine.check_http,
+            MonitorType.HTTPS.value: MonitoringEngine.check_http,
+            MonitorType.PING.value: MonitoringEngine.check_ping,
+            MonitorType.PORT.value: MonitoringEngine.check_port,
+            MonitorType.KEYWORD.value: MonitoringEngine.check_keyword,
+        }
+        method = check_methods.get(monitor.monitor_type, MonitoringEngine.check_http)
+        return await method(monitor)
+
+
+# =============================================================================
+# SECTION 10: SSL Certificate Checker
+# =============================================================================
+
+async def check_ssl_certificate(hostname: str) -> dict:
+    """Check SSL certificate expiry for a hostname."""
+    result = {"valid": False, "expiry_date": None, "days_remaining": None, "issuer": None}
+    try:
+        ctx = ssl.create_default_context()
+        loop = asyncio.get_event_loop()
+
+        def _check():
+            with socket.create_connection((hostname, 443), timeout=10) as sock:
+                with ctx.wrap_socket(sock, server_hostname=hostname) as ssock:
+                    cert = ssock.getpeercert()
+                    expiry_str = cert.get("notAfter", "")
+                    expiry = datetime.strptime(expiry_str, "%b %d %H:%M:%S %Y %Z")
+                    days_rem = (expiry - datetime.utcnow()).days
+                    issuer = dict(x[0] for x in cert.get("issuer", []))
+                    return {
+                        "valid": days_rem > 0,
+                        "expiry_date": expiry,
+                        "days_remaining": days_rem,
+                        "issuer": issuer.get("organizationName", "Unknown"),
                     }
-                    for ch in chapters
-                ]
-            }
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-            return path
-        except Exception as e:
-            logger.error(f"Error writing JSON: {e}")
-            return None
 
-    def _write_markdown(self, chapters, job_dir, name) -> Optional[Path]:
-        path = job_dir / f"{name}.md"
-        try:
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(f"# {name}\n\n")
-                f.write(f"*Scraped: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*\n\n")
-                f.write(f"**Total Chapters: {len(chapters)}**\n\n---\n\n")
-                for ch in chapters:
-                    title = ch.title or f"Chapter {ch.chapter_number}"
-                    f.write(f"## Chapter {ch.chapter_number}: {title}\n\n")
-                    f.write(ch.content or "*No content*")
-                    f.write("\n\n---\n\n")
-            return path
-        except Exception as e:
-            logger.error(f"Error writing Markdown: {e}")
-            return None
-
-    def _write_epub(self, chapters, job_dir, name) -> Optional[Path]:
-        if not HAS_EPUB:
-            return None
-        path = job_dir / f"{name}.epub"
-        try:
-            book = epub.EpubBook()
-            book.set_identifier(f"novel-{uuid.uuid4().hex[:8]}")
-            book.set_title(name)
-            book.set_language('zh')
-            book.add_author('Novel Scraper')
-
-            spine = ['nav']
-            toc = []
-
-            for ch in chapters:
-                title = ch.title or f"Chapter {ch.chapter_number}"
-                chapter = epub.EpubHtml(
-                    title=title,
-                    file_name=f"chapter_{ch.chapter_number:05d}.xhtml",
-                    lang="zh"
-                )
-                content_html = ch.content.replace('\n', '<br/>\n') if ch.content else ""
-                chapter.content = f"<h2>{html_module.escape(title)}</h2><p>{content_html}</p>"
-                book.add_item(chapter)
-                spine.append(chapter)
-                toc.append(chapter)
-
-            book.toc = toc
-            book.add_item(epub.EpubNcx())
-            book.add_item(epub.EpubNav())
-            book.spine = spine
-            epub.write_epub(str(path), book)
-            return path
-        except Exception as e:
-            logger.error(f"Error writing EPUB: {e}")
-            return None
-
-    def _write_zip(self, chapters, job_dir, name) -> Optional[Path]:
-        path = job_dir / f"{name}.zip"
-        try:
-            with zipfile.ZipFile(path, 'w', zipfile.ZIP_DEFLATED) as zf:
-                for ch in chapters:
-                    title = self.safe_filename(ch.title or f"Chapter_{ch.chapter_number}")
-                    fname = f"{ch.chapter_number:05d}_{title}.txt"
-                    content = f"--- Chapter {ch.chapter_number}: {ch.title or ''} ---\n\n"
-                    content += ch.content or "[No content]"
-                    zf.writestr(fname, content)
-            return path
-        except Exception as e:
-            logger.error(f"Error writing ZIP: {e}")
-            return None
+        result = await loop.run_in_executor(None, _check)
+    except Exception as e:
+        result["error"] = str(e)[:200]
+    return result
 
 
-# ============================================================
-# PERFORMANCE MONITOR
-# ============================================================
+# =============================================================================
+# SECTION 11: ALERTING ENGINE
+# =============================================================================
 
-class PerformanceMonitor:
-    """System performance monitoring."""
+class AlertingEngine:
+    """Handles sending alerts via multiple channels."""
 
     @staticmethod
-    def get_stats() -> Dict[str, Any]:
-        stats = {
-            "cpu_count": Config.CPU_COUNT,
-            "cpu_percent": 0.0,
-            "ram_total_mb": 0,
-            "ram_used_mb": 0,
-            "ram_percent": 0.0,
-            "disk_total_gb": 0,
-            "disk_used_gb": 0,
-            "disk_free_gb": 0,
+    async def send_email_alert(to_email: str, subject: str, body: str):
+        """Send an email alert."""
+        if not settings.SMTP_USER:
+            logger.warning("SMTP not configured, skipping email alert")
+            return False
+        try:
+            msg = MIMEMultipart("alternative")
+            msg["Subject"] = subject
+            msg["From"] = settings.FROM_EMAIL
+            msg["To"] = to_email
+            html_body = f"""
+            <html>
+            <body style="background:#2E0249;color:#fff;font-family:Arial;padding:20px;">
+              <div style="max-width:600px;margin:0 auto;background:rgba(46,2,73,0.8);
+                          border:1px solid #F806CC;border-radius:12px;padding:30px;">
+                <h1 style="color:#F806CC;text-align:center;">⚡ NeonWatch Alert</h1>
+                <div style="color:#e0e0e0;line-height:1.6;">{body}</div>
+                <hr style="border-color:#A855F7;margin:20px 0;">
+                <p style="color:#888;font-size:12px;text-align:center;">
+                  NeonWatch Uptime Monitoring - God Level Edition
+                </p>
+              </div>
+            </body>
+            </html>
+            """
+            msg.attach(MIMEText(html_body, "html"))
+
+            loop = asyncio.get_event_loop()
+            def _send():
+                with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as server:
+                    server.starttls()
+                    server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+                    server.sendmail(settings.FROM_EMAIL, to_email, msg.as_string())
+            await loop.run_in_executor(None, _send)
+            logger.info(f"📧 Email alert sent to {to_email}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to send email: {e}")
+            return False
+
+    @staticmethod
+    async def send_webhook_alert(webhook_url: str, payload: dict):
+        """Send a webhook alert."""
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                response = await client.post(webhook_url, json=payload)
+                logger.info(f"🔗 Webhook sent to {webhook_url}: {response.status_code}")
+                return response.status_code < 400
+        except Exception as e:
+            logger.error(f"Webhook failed: {e}")
+            return False
+
+    @staticmethod
+    async def send_discord_alert(webhook_url: str, monitor_name: str, status: str, details: str):
+        """Send a Discord webhook alert."""
+        color = 0x00FF00 if status == "up" else 0xFF0000
+        payload = {
+            "embeds": [{
+                "title": f"⚡ NeonWatch: {monitor_name}",
+                "description": details,
+                "color": color,
+                "timestamp": datetime.utcnow().isoformat(),
+                "footer": {"text": "NeonWatch Monitoring"},
+            }]
         }
-        if HAS_PSUTIL:
+        return await AlertingEngine.send_webhook_alert(webhook_url, payload)
+
+    @staticmethod
+    async def send_slack_alert(webhook_url: str, monitor_name: str, status: str, details: str):
+        """Send a Slack webhook alert."""
+        emoji = "✅" if status == "up" else "🔴"
+        payload = {
+            "text": f"{emoji} *NeonWatch Alert*: {monitor_name}\n{details}"
+        }
+        return await AlertingEngine.send_webhook_alert(webhook_url, payload)
+
+    @staticmethod
+    async def dispatch_alert(user: User, monitor: Monitor, status: str, details: str):
+        """Dispatch alerts to all configured channels for a user."""
+        subject = f"[{'UP ✅' if status == 'up' else 'DOWN 🔴'}] {monitor.name}"
+
+        tasks = []
+
+        # Email alert
+        alert_email = user.notification_email or user.email
+        if alert_email:
+            tasks.append(AlertingEngine.send_email_alert(alert_email, subject, details))
+
+        # Webhook
+        if user.webhook_url:
+            payload = {
+                "monitor_name": monitor.name,
+                "monitor_url": monitor.url,
+                "status": status,
+                "details": details,
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+            tasks.append(AlertingEngine.send_webhook_alert(user.webhook_url, payload))
+
+        # Discord
+        if user.discord_webhook:
+            tasks.append(AlertingEngine.send_discord_alert(
+                user.discord_webhook, monitor.name, status, details
+            ))
+
+        # Slack
+        if user.slack_webhook:
+            tasks.append(AlertingEngine.send_slack_alert(
+                user.slack_webhook, monitor.name, status, details
+            ))
+
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+
+# =============================================================================
+# SECTION 12: DAILY STATS CALCULATOR
+# =============================================================================
+
+def calculate_daily_stats(db: Session, monitor_id: int, date: datetime.date = None):
+    """Calculate and store daily uptime statistics."""
+    if date is None:
+        date = datetime.utcnow().date()
+
+    start_dt = datetime.combine(date, datetime.min.time())
+    end_dt = datetime.combine(date, datetime.max.time())
+
+    logs = db.query(MonitorLog).filter(
+        MonitorLog.monitor_id == monitor_id,
+        MonitorLog.created_at >= start_dt,
+        MonitorLog.created_at <= end_dt,
+    ).all()
+
+    if not logs:
+        return
+
+    total = len(logs)
+    up_count = sum(1 for l in logs if l.status == MonitorStatus.UP.value)
+    down_count = total - up_count
+    response_times = [l.response_time for l in logs if l.response_time is not None]
+
+    uptime_pct = (up_count / total * 100) if total > 0 else 100.0
+    avg_rt = sum(response_times) / len(response_times) if response_times else None
+    min_rt = min(response_times) if response_times else None
+    max_rt = max(response_times) if response_times else None
+
+    # Upsert daily stats
+    stats = db.query(DailyStats).filter(
+        DailyStats.monitor_id == monitor_id,
+        DailyStats.date == date,
+    ).first()
+
+    if stats:
+        stats.total_checks = total
+        stats.up_checks = up_count
+        stats.down_checks = down_count
+        stats.uptime_percentage = round(uptime_pct, 4)
+        stats.avg_response_time = round(avg_rt, 2) if avg_rt else None
+        stats.min_response_time = round(min_rt, 2) if min_rt else None
+        stats.max_response_time = round(max_rt, 2) if max_rt else None
+    else:
+        stats = DailyStats(
+            monitor_id=monitor_id,
+            date=date,
+            total_checks=total,
+            up_checks=up_count,
+            down_checks=down_count,
+            uptime_percentage=round(uptime_pct, 4),
+            avg_response_time=round(avg_rt, 2) if avg_rt else None,
+            min_response_time=round(min_rt, 2) if min_rt else None,
+            max_response_time=round(max_rt, 2) if max_rt else None,
+        )
+        db.add(stats)
+
+    db.commit()
+
+
+# =============================================================================
+# SECTION 13: BACKGROUND MONITOR RUNNER
+# =============================================================================
+
+async def run_single_monitor_check(monitor_id: int):
+    """Execute a single monitor check and update the database."""
+    db = SessionLocal()
+    try:
+        monitor = db.query(Monitor).options(
+            joinedload(Monitor.owner)
+        ).filter(Monitor.id == monitor_id).first()
+
+        if not monitor or not monitor.is_active:
+            return
+
+        logger.info(f"🔍 Checking: {monitor.name} ({monitor.monitor_type}) -> {monitor.url}")
+
+        result = await MonitoringEngine.perform_check(monitor)
+
+        # Create log entry
+        log = MonitorLog(
+            monitor_id=monitor.id,
+            status=result["status"],
+            response_time=result.get("response_time"),
+            status_code=result.get("status_code"),
+            response_body_snippet=result.get("response_body_snippet"),
+            error_message=result.get("error_message"),
+            ip_address=result.get("ip_address"),
+            ssl_valid=result.get("ssl_valid"),
+            content_length=result.get("content_length"),
+            headers_snapshot=result.get("headers_snapshot"),
+        )
+        db.add(log)
+
+        # Update monitor stats
+        previous_status = monitor.status
+        monitor.status = result["status"]
+        monitor.last_check_at = datetime.utcnow()
+        monitor.last_response_time = result.get("response_time")
+        monitor.total_checks = (monitor.total_checks or 0) + 1
+
+        if result["status"] == MonitorStatus.UP.value:
+            monitor.total_up = (monitor.total_up or 0) + 1
+            monitor.consecutive_failures = 0
+        else:
+            monitor.total_down = (monitor.total_down or 0) + 1
+            monitor.consecutive_failures = (monitor.consecutive_failures or 0) + 1
+
+        # Uptime percentage
+        if monitor.total_checks > 0:
+            monitor.uptime_percentage = round(
+                (monitor.total_up / monitor.total_checks) * 100, 4
+            )
+
+        # Incident tracking & alerting
+        if previous_status != result["status"]:
+            monitor.last_status_change = datetime.utcnow()
+
+            if result["status"] == MonitorStatus.DOWN.value:
+                # Status went DOWN
+                if monitor.consecutive_failures >= monitor.alert_threshold:
+                    incident = Incident(
+                        monitor_id=monitor.id,
+                        started_at=datetime.utcnow(),
+                        cause=result.get("error_message", "Unknown"),
+                    )
+                    db.add(incident)
+
+                    if monitor.alert_on_down and monitor.owner:
+                        details = (
+                            f"<h3>🔴 Monitor DOWN</h3>"
+                            f"<p><strong>{monitor.name}</strong> is not responding.</p>"
+                            f"<p>URL: {monitor.url}</p>"
+                            f"<p>Error: {result.get('error_message', 'N/A')}</p>"
+                            f"<p>Time: {datetime.utcnow().isoformat()}</p>"
+                        )
+                        await AlertingEngine.dispatch_alert(
+                            monitor.owner, monitor, "down", details
+                        )
+
+            elif result["status"] == MonitorStatus.UP.value and previous_status == MonitorStatus.DOWN.value:
+                # Recovery
+                open_incident = db.query(Incident).filter(
+                    Incident.monitor_id == monitor.id,
+                    Incident.is_resolved == False,
+                ).first()
+
+                if open_incident:
+                    open_incident.is_resolved = True
+                    open_incident.resolved_at = datetime.utcnow()
+                    open_incident.duration_seconds = int(
+                        (datetime.utcnow() - open_incident.started_at).total_seconds()
+                    )
+
+                if monitor.alert_on_recovery and monitor.owner:
+                    details = (
+                        f"<h3>✅ Monitor UP (Recovered)</h3>"
+                        f"<p><strong>{monitor.name}</strong> is back online!</p>"
+                        f"<p>URL: {monitor.url}</p>"
+                        f"<p>Response Time: {result.get('response_time', 'N/A')}ms</p>"
+                        f"<p>Time: {datetime.utcnow().isoformat()}</p>"
+                    )
+                    await AlertingEngine.dispatch_alert(
+                        monitor.owner, monitor, "up", details
+                    )
+
+        # SSL Certificate tracking
+        if monitor.monitor_type in ["http", "https"] and monitor.url.startswith("https://"):
             try:
-                stats["cpu_percent"] = psutil.cpu_percent(interval=0.1)
-                mem = psutil.virtual_memory()
-                stats["ram_total_mb"] = round(mem.total / (1024**2))
-                stats["ram_used_mb"] = round(mem.used / (1024**2))
-                stats["ram_percent"] = mem.percent
-                disk = psutil.disk_usage('/')
-                stats["disk_total_gb"] = round(disk.total / (1024**3), 1)
-                stats["disk_used_gb"] = round(disk.used / (1024**3), 1)
-                stats["disk_free_gb"] = round(disk.free / (1024**3), 1)
+                from urllib.parse import urlparse
+                hostname = urlparse(monitor.url).hostname
+                ssl_info = await check_ssl_certificate(hostname)
+                if ssl_info.get("expiry_date"):
+                    monitor.ssl_expiry_date = ssl_info["expiry_date"]
+                    monitor.ssl_days_remaining = ssl_info["days_remaining"]
             except Exception:
                 pass
-        return stats
 
+        db.commit()
 
-# ============================================================
-# JOB MANAGER
-# ============================================================
+        # Update daily stats
+        calculate_daily_stats(db, monitor.id)
 
-class JobManager:
-    """Manages scraping jobs with lifecycle control."""
+        # Update cache
+        cache_delete(f"monitor:{monitor.id}")
+        cache_delete(f"user_monitors:{monitor.user_id}")
 
-    def __init__(self):
-        self.jobs: Dict[str, JobState] = {}
-        self.scraper_engines: Dict[str, ScraperEngine] = {}
-        self.job_threads: Dict[str, threading.Thread] = {}
-        self.output_manager = OutputManager()
-        self.performance = PerformanceMonitor()
-        self._lock = threading.Lock()
-        self._load_persisted_jobs()
-
-    def _load_persisted_jobs(self):
-        """Load completed/failed jobs from disk for history."""
-        try:
-            for f in STATE_DIR.glob("*.json"):
-                try:
-                    with open(f, "r", encoding="utf-8") as fp:
-                        data = json.load(fp)
-                    job_id = data.get("job_id", f.stem)
-                    config = JobConfig(**data.get("config", {}))
-                    state = JobState(job_id=job_id, config=config)
-                    state.status = JobStatus(data.get("status", "completed"))
-                    state.completed_count = data.get("completed_count", 0)
-                    state.failed_count = data.get("failed_count", 0)
-                    state.total_chapters = data.get("total_chapters", 0)
-                    state.start_time = data.get("start_time", 0)
-                    state.end_time = data.get("end_time", 0)
-                    state.output_files = data.get("output_files", [])
-                    state.last_successful_chapter = data.get("last_successful_chapter", 0)
-                    self.jobs[job_id] = state
-                except Exception as e:
-                    logger.warning(f"Failed to load job state {f}: {e}")
-        except Exception as e:
-            logger.warning(f"Failed to scan state dir: {e}")
-
-    def _persist_job(self, job_id: str):
-        """Save job state to disk."""
-        try:
-            state = self.jobs.get(job_id)
-            if not state:
-                return
-            data = {
-                "job_id": job_id,
-                "config": state.config.to_dict(),
-                "status": state.status.value,
-                "completed_count": state.completed_count,
-                "failed_count": state.failed_count,
-                "total_chapters": state.total_chapters,
-                "start_time": state.start_time,
-                "end_time": state.end_time,
-                "output_files": state.output_files,
-                "last_successful_chapter": state.last_successful_chapter,
-            }
-            with open(STATE_DIR / f"{job_id}.json", "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
-        except Exception as e:
-            logger.error(f"Failed to persist job {job_id}: {e}")
-
-    def create_job(self, config: JobConfig) -> str:
-        """Create a new scraping job."""
-        job_id = f"job_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
-        config.job_id = job_id
-        config.created_at = datetime.now().isoformat()
-
-        # Validate and fix pattern
-        if config.scrape_mode == "pattern":
-            config.url_pattern = self._validate_pattern(config.url_pattern)
-
-        state = JobState(job_id=job_id, config=config)
-        self.jobs[job_id] = state
-
-        logger.info(f"Job created: {job_id}")
-        return job_id
-
-    def _validate_pattern(self, pattern: str) -> str:
-        """Validate and fix URL pattern."""
-        if not pattern:
-            return pattern
-
-        # Check if {} exists
-        if '{}' not in pattern:
-            # Try to find numeric part and replace with {}
-            match = re.search(r'(\d+)(\.html?)?$', pattern)
-            if match:
-                num_start = match.start(1)
-                num_end = match.end(1)
-                pattern = pattern[:num_start] + '{}' + pattern[num_end:]
-                logger.info(f"Auto-fixed pattern: {pattern}")
-            else:
-                # Append {}
-                if pattern.endswith('/'):
-                    pattern += '{}.html'
-                else:
-                    pattern += '/{}.html'
-                logger.info(f"Auto-appended pattern: {pattern}")
-
-        # Validate URL
-        parsed = urllib.parse.urlparse(pattern.replace('{}', '1'))
-        if not parsed.scheme:
-            pattern = 'https://' + pattern
-        if not parsed.netloc:
-            logger.warning(f"Pattern may be invalid: {pattern}")
-
-        return pattern
-
-    def start_job(self, job_id: str):
-        """Start a scraping job in background thread."""
-        state = self.jobs.get(job_id)
-        if not state:
-            raise ValueError(f"Job not found: {job_id}")
-
-        if state.status in (JobStatus.RUNNING, JobStatus.RESUMING):
-            raise ValueError("Job is already running")
-
-        engine = ScraperEngine()
-        self.scraper_engines[job_id] = engine
-
-        thread = threading.Thread(
-            target=self._run_job,
-            args=(job_id,),
-            daemon=True,
-            name=f"job-{job_id}"
+        status_emoji = "✅" if result["status"] == "up" else "🔴"
+        logger.info(
+            f"{status_emoji} {monitor.name}: {result['status'].upper()} "
+            f"({result.get('response_time', 'N/A')}ms)"
         )
-        self.job_threads[job_id] = thread
-        state.status = JobStatus.RUNNING
-        state.start_time = time.time()
-        thread.start()
-        logger.info(f"Job started: {job_id}")
 
-    def _run_job(self, job_id: str):
-        """Main job execution logic."""
-        state = self.jobs[job_id]
-        config = state.config
-        engine = self.scraper_engines[job_id]
+    except Exception as e:
+        logger.error(f"❌ Error checking monitor {monitor_id}: {e}")
+        db.rollback()
+    finally:
+        db.close()
 
-        try:
-            # Handle login if needed
-            if config.login_url and config.login_user:
-                domain = urllib.parse.urlparse(config.url_pattern or config.start_url).netloc
-                session = engine.anti_detection.get_session(domain)
-                engine.session_mgr.login(
-                    session, config.login_url,
-                    config.login_user, config.login_pass,
-                    config.url_pattern or config.start_url
-                )
 
-            if config.scrape_mode == "pattern":
-                self._run_pattern_mode(job_id)
-            elif config.scrape_mode == "smart":
-                self._run_smart_mode(job_id)
+async def run_all_monitors():
+    """Run checks for all active monitors that are due."""
+    db = SessionLocal()
+    try:
+        now = datetime.utcnow()
+        monitors = db.query(Monitor).filter(
+            Monitor.is_active == True,
+            Monitor.status != MonitorStatus.PAUSED.value,
+        ).all()
+
+        tasks = []
+        for monitor in monitors:
+            if monitor.last_check_at is None:
+                tasks.append(run_single_monitor_check(monitor.id))
             else:
-                raise ValueError(f"Unknown scrape mode: {config.scrape_mode}")
+                next_check = monitor.last_check_at + timedelta(seconds=monitor.check_interval)
+                if now >= next_check:
+                    tasks.append(run_single_monitor_check(monitor.id))
 
-            # Compile output
-            if state.status not in (JobStatus.CANCELLED, JobStatus.FAILED):
-                state.output_files = self.output_manager.compile_output(state)
-                state.status = JobStatus.COMPLETED
+        if tasks:
+            logger.info(f"🚀 Running {len(tasks)} monitor checks...")
+            await asyncio.gather(*tasks, return_exceptions=True)
+        else:
+            logger.debug("💤 No monitors due for checking")
 
-        except Exception as e:
-            logger.error(f"Job {job_id} failed: {e}\n{traceback.format_exc()}")
-            state.status = JobStatus.FAILED
-            state.error_log.append(f"Fatal: {str(e)}")
+    except Exception as e:
+        logger.error(f"❌ Error in monitor runner: {e}")
+    finally:
+        db.close()
+
+
+# =============================================================================
+# SECTION 14: CELERY CONFIGURATION (Background Task Queue)
+# =============================================================================
+
+if CELERY_AVAILABLE:
+    celery_app = Celery(
+        "neonwatch",
+        broker=settings.CELERY_BROKER_URL,
+        backend=settings.CELERY_RESULT_BACKEND,
+    )
+
+    celery_app.conf.update(
+        task_serializer="json",
+        accept_content=["json"],
+        result_serializer="json",
+        timezone="UTC",
+        enable_utc=True,
+        beat_schedule={
+            "run-monitor-checks": {
+                "task": "monitoring.run_monitor_checks_task",
+                "schedule": 60.0,  # Every 60 seconds
+            },
+            "daily-stats-aggregation": {
+                "task": "monitoring.aggregate_daily_stats_task",
+                "schedule": crontab(minute=5, hour=0),  # Daily at 00:05
+            },
+            "cleanup-old-logs": {
+                "task": "monitoring.cleanup_old_logs_task",
+                "schedule": crontab(minute=0, hour=3),  # Daily at 03:00
+            },
+        },
+    )
+
+    @celery_app.task(name="monitoring.run_monitor_checks_task")
+    def run_monitor_checks_task():
+        """Celery task: run all due monitor checks."""
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(run_all_monitors())
+        loop.close()
+
+    @celery_app.task(name="monitoring.run_single_check_task")
+    def run_single_check_task(monitor_id: int):
+        """Celery task: run a single monitor check."""
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(run_single_monitor_check(monitor_id))
+        loop.close()
+
+    @celery_app.task(name="monitoring.aggregate_daily_stats_task")
+    def aggregate_daily_stats_task():
+        """Celery task: aggregate daily stats for all monitors."""
+        db = SessionLocal()
+        try:
+            yesterday = (datetime.utcnow() - timedelta(days=1)).date()
+            monitors = db.query(Monitor).filter(Monitor.is_active == True).all()
+            for monitor in monitors:
+                calculate_daily_stats(db, monitor.id, yesterday)
+            logger.info(f"📊 Daily stats aggregated for {len(monitors)} monitors")
         finally:
-            state.end_time = time.time()
-            engine.close()
-            self._persist_job(job_id)
-            logger.info(f"Job {job_id} finished: {state.status.value}")
+            db.close()
 
-    def _run_pattern_mode(self, job_id: str):
-        """Run pattern-based scraping with thread pool."""
-        state = self.jobs[job_id]
-        config = state.config
-        engine = self.scraper_engines[job_id]
+    @celery_app.task(name="monitoring.cleanup_old_logs_task")
+    def cleanup_old_logs_task():
+        """Celery task: cleanup logs older than 90 days."""
+        db = SessionLocal()
+        try:
+            cutoff = datetime.utcnow() - timedelta(days=90)
+            deleted = db.query(MonitorLog).filter(
+                MonitorLog.created_at < cutoff
+            ).delete()
+            db.commit()
+            logger.info(f"🗑️ Cleaned up {deleted} old log entries")
+        finally:
+            db.close()
 
-        start = config.start_chapter
-        end = min(config.end_chapter, config.start_chapter + Config.MAX_CHAPTERS - 1)
-        state.total_chapters = end - start + 1
 
-        # Generate URLs
-        urls = {}
-        for i in range(start, end + 1):
-            url = config.url_pattern.replace('{}', str(i))
-            urls[i] = url
+# =============================================================================
+# SECTION 15: FASTAPI APPLICATION & LIFESPAN
+# =============================================================================
 
-        # Resume support: skip already completed
-        completed_chapters = {ch_num for ch_num, ch in state.chapters.items() if ch.status == "success"}
-        pending = {k: v for k, v in urls.items() if k not in completed_chapters}
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan handler - startup/shutdown."""
+    # STARTUP
+    logger.info("🚀 NeonWatch starting up...")
+    Base.metadata.create_all(bind=engine)
+    logger.info("📦 Database tables created/verified")
 
-        max_workers = min(config.max_workers, Config.MAX_WORKERS)
-        response_times = deque(maxlen=100)
-        chapters_done_since_start = 0
-        speed_start_time = time.time()
+    # Initialize SiteConfig singleton
+    db = SessionLocal()
+    try:
+        config = db.query(SiteConfig).filter(SiteConfig.id == 1).first()
+        if not config:
+            config = SiteConfig(id=1)
+            db.add(config)
+            db.commit()
+            logger.info("⚙️ Default SiteConfig initialized")
 
-        # Process in chunks
-        chunk_keys = sorted(pending.keys())
-
-        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="scrape") as pool:
-            futures: Dict[Future, int] = {}
-
-            for chunk_start in range(0, len(chunk_keys), Config.CHUNK_SIZE):
-                if state.status in (JobStatus.CANCELLED, JobStatus.PAUSED):
-                    break
-
-                chunk = chunk_keys[chunk_start:chunk_start + Config.CHUNK_SIZE]
-
-                for ch_num in chunk:
-                    if state.status in (JobStatus.CANCELLED, JobStatus.PAUSED):
-                        break
-
-                    # Dynamic worker adjustment
-                    current_workers = min(max_workers, max(1, max_workers - engine.anti_detection.consecutive_blocks))
-                    state.active_threads = len([f for f in futures.values() if not isinstance(f, int)])
-
-                    # Wait if too many active
-                    while len(futures) >= current_workers:
-                        done_futures = [f for f in futures if f.done()]
-                        if not done_futures:
-                            time.sleep(0.1)
-                            continue
-                        for df in done_futures:
-                            ch = df.result()
-                            state.chapters[ch.chapter_number] = ch
-                            if ch.status == "success":
-                                state.completed_count += 1
-                                state.last_successful_chapter = max(
-                                    state.last_successful_chapter, ch.chapter_number
-                                )
-                                chapters_done_since_start += 1
-                            elif ch.status == "failed":
-                                state.failed_count += 1
-                                state.error_log.append(
-                                    f"Ch {ch.chapter_number}: {ch.error_type} - {ch.error_message[:200]}"
-                                )
-                            elif ch.status == "not_found":
-                                state.skipped_count += 1
-
-                            if ch.response_time > 0:
-                                response_times.append(ch.response_time)
-
-                            del futures[df]
-
-                    # Update stats
-                    if response_times:
-                        state.avg_response_time = sum(response_times) / len(response_times)
-                    elapsed = time.time() - speed_start_time
-                    if elapsed > 0:
-                        state.current_speed = chapters_done_since_start / (elapsed / 60)
-                    remaining = state.total_chapters - state.completed_count - state.failed_count - state.skipped_count
-                    if state.current_speed > 0:
-                        eta_minutes = remaining / state.current_speed
-                        state.estimated_eta = str(timedelta(minutes=int(eta_minutes)))
-                    state.current_delay = engine.anti_detection.get_delay(config.delay_min, config.delay_max)
-
-                    # Submit task
-                    delay = engine.anti_detection.get_delay(config.delay_min, config.delay_max)
-                    time.sleep(delay)
-                    future = pool.submit(engine.scrape_chapter, ch_num, pending[ch_num], config)
-                    futures[future] = ch_num
-
-                # Collect remaining futures from chunk
-                for f in as_completed(futures):
-                    try:
-                        ch = f.result(timeout=120)
-                        state.chapters[ch.chapter_number] = ch
-                        if ch.status == "success":
-                            state.completed_count += 1
-                            state.last_successful_chapter = max(
-                                state.last_successful_chapter, ch.chapter_number
-                            )
-                            chapters_done_since_start += 1
-                        elif ch.status == "failed":
-                            state.failed_count += 1
-                        elif ch.status == "not_found":
-                            state.skipped_count += 1
-                        if ch.response_time > 0:
-                            response_times.append(ch.response_time)
-                    except Exception as e:
-                        logger.error(f"Future error: {e}")
-                futures.clear()
-
-            state.active_threads = 0
-
-    def _run_smart_mode(self, job_id: str):
-        """Run smart detection mode - follow next links."""
-        state = self.jobs[job_id]
-        config = state.config
-        engine = self.scraper_engines[job_id]
-
-        current_url = config.start_url
-        if not current_url:
-            raise ValueError("Smart mode requires start_url")
-
-        visited_urls: Set[str] = set()
-        visited_hashes: Set[str] = set()
-        chapter_num = config.start_chapter
-        max_chapters = min(config.end_chapter - config.start_chapter + 1, Config.MAX_CHAPTERS)
-        state.total_chapters = max_chapters  # Estimated, will update
-
-        while chapter_num <= config.start_chapter + max_chapters - 1:
-            if state.status in (JobStatus.CANCELLED, JobStatus.PAUSED):
-                break
-
-            if current_url in visited_urls:
-                logger.warning(f"Loop detected at {current_url}, stopping")
-                break
-            visited_urls.add(current_url)
-
-            # Fetch chapter
-            delay = engine.anti_detection.get_delay(config.delay_min, config.delay_max)
-            time.sleep(delay)
-
-            result = engine.scrape_chapter(chapter_num, current_url, config)
-
-            # Duplicate detection
-            if result.content:
-                content_hash = hashlib.md5(result.content.encode()).hexdigest()
-                if content_hash in visited_hashes:
-                    logger.warning(f"Duplicate content at chapter {chapter_num}, stopping")
-                    result.status = "duplicate"
-                    state.skipped_count += 1
-                    break
-                visited_hashes.add(content_hash)
-
-            state.chapters[chapter_num] = result
-            if result.status == "success":
-                state.completed_count += 1
-                state.last_successful_chapter = chapter_num
-            elif result.status == "failed":
-                state.failed_count += 1
-            elif result.status == "not_found":
-                state.skipped_count += 1
-                break
-
-            # Update progress
-            state.total_chapters = max(state.total_chapters, chapter_num)
-            elapsed = time.time() - state.start_time if state.start_time else 1
-            state.current_speed = state.completed_count / (elapsed / 60) if elapsed > 0 else 0
-
-            # Find next URL
-            try:
-                html, _, _, _ = engine.fetch_page(current_url, config)
-                next_url = engine.extraction.find_next_url(
-                    html, current_url, config.next_button_selector
-                )
-            except Exception:
-                next_url = None
-
-            if not next_url:
-                logger.info(f"No next URL found after chapter {chapter_num}")
-                break
-
-            # Normalize URL
-            next_url = urllib.parse.urljoin(current_url, next_url)
-            current_url = next_url
-            chapter_num += 1
-
-        state.total_chapters = chapter_num - config.start_chapter
-
-    def pause_job(self, job_id: str):
-        state = self.jobs.get(job_id)
-        if state and state.status == JobStatus.RUNNING:
-            state.status = JobStatus.PAUSED
-            engine = self.scraper_engines.get(job_id)
-            if engine:
-                engine.stop()
-            logger.info(f"Job paused: {job_id}")
-
-    def resume_job(self, job_id: str):
-        state = self.jobs.get(job_id)
-        if state and state.status == JobStatus.PAUSED:
-            engine = ScraperEngine()
-            self.scraper_engines[job_id] = engine
-            state.status = JobStatus.RESUMING
-            thread = threading.Thread(
-                target=self._run_job,
-                args=(job_id,),
-                daemon=True,
-                name=f"job-{job_id}-resume"
+        # Create default superadmin
+        admin = db.query(User).filter(User.username == "admin").first()
+        if not admin:
+            admin = User(
+                username="admin",
+                email="admin@neonwatch.io",
+                password_hash=hash_password("admin123456"),
+                full_name="Super Administrator",
+                role=UserRole.SUPERADMIN.value,
+                plan=UserPlan.ENTERPRISE.value,
+                is_active=True,
+                email_verified=True,
+                max_monitors=9999,
             )
-            self.job_threads[job_id] = thread
-            state.status = JobStatus.RUNNING
-            thread.start()
-            logger.info(f"Job resumed: {job_id}")
+            db.add(admin)
+            db.commit()
+            logger.info("👑 Default superadmin created (admin / admin123456)")
+    finally:
+        db.close()
 
-    def cancel_job(self, job_id: str):
-        state = self.jobs.get(job_id)
-        if state and state.status in (JobStatus.RUNNING, JobStatus.PAUSED, JobStatus.RESUMING):
-            state.status = JobStatus.CANCELLED
-            engine = self.scraper_engines.get(job_id)
-            if engine:
-                engine.stop()
-            state.end_time = time.time()
-            self._persist_job(job_id)
-            logger.info(f"Job cancelled: {job_id}")
+    # Start background monitor loop (if Celery is not available)
+    monitor_task = None
+    if not CELERY_AVAILABLE:
+        async def _monitor_loop():
+            while True:
+                try:
+                    await run_all_monitors()
+                except Exception as e:
+                    logger.error(f"Monitor loop error: {e}")
+                await asyncio.sleep(60)
 
-    def delete_job(self, job_id: str):
-        self.cancel_job(job_id)
-        if job_id in self.jobs:
-            del self.jobs[job_id]
-        state_file = STATE_DIR / f"{job_id}.json"
-        if state_file.exists():
-            state_file.unlink()
-        job_output = OUTPUT_DIR / job_id
-        if job_output.exists():
-            shutil.rmtree(job_output, ignore_errors=True)
+        monitor_task = asyncio.create_task(_monitor_loop())
+        logger.info("🔄 Built-in monitor loop started (no Celery)")
 
-    def get_job_status(self, job_id: str) -> Optional[Dict]:
-        state = self.jobs.get(job_id)
-        if not state:
-            return None
-        return state.to_dict()
+    logger.info("✨ NeonWatch is ready! God-Level monitoring activated.")
 
-    def get_job_chapters(self, job_id: str) -> List[Dict]:
-        state = self.jobs.get(job_id)
-        if not state:
-            return []
-        return [ch.to_dict() for ch in sorted(state.chapters.values(), key=lambda c: c.chapter_number)]
+    yield
 
-    def get_all_jobs(self) -> List[Dict]:
-        result = []
-        for jid, state in sorted(self.jobs.items(), key=lambda x: x[1].config.created_at or '', reverse=True):
-            result.append({
-                "job_id": jid,
-                "novel_name": state.config.novel_name,
-                "status": state.status.value,
-                "progress": f"{state.completed_count}/{state.total_chapters}",
-                "created_at": state.config.created_at,
-                "output_files": len(state.output_files),
-            })
-        return result
-
-    def get_output_files(self, job_id: str) -> List[Dict]:
-        state = self.jobs.get(job_id)
-        if not state:
-            return []
-        files = []
-        for fp in state.output_files:
-            p = Path(fp)
-            if p.exists():
-                files.append({
-                    "name": p.name,
-                    "path": str(p),
-                    "size": p.stat().st_size,
-                    "size_human": self._human_size(p.stat().st_size),
-                })
-        return files
-
-    @staticmethod
-    def _human_size(size: int) -> str:
-        for unit in ['B', 'KB', 'MB', 'GB']:
-            if size < 1024:
-                return f"{size:.1f} {unit}"
-            size /= 1024
-        return f"{size:.1f} TB"
+    # SHUTDOWN
+    if monitor_task:
+        monitor_task.cancel()
+    logger.info("👋 NeonWatch shutting down...")
 
 
-# ============================================================
-# GLOBAL INSTANCES
-# ============================================================
+app = FastAPI(
+    title=settings.APP_NAME,
+    version=settings.APP_VERSION,
+    description=settings.APP_DESCRIPTION,
+    lifespan=lifespan,
+)
 
-job_manager = JobManager()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
-# ============================================================
-# FLASK WEB DASHBOARD
-# ============================================================
+# =============================================================================
+# SECTION 16: API ROUTES - Authentication
+# =============================================================================
 
-DASHBOARD_HTML = r'''
+@app.post("/api/auth/register", tags=["Auth"])
+async def register(data: UserRegisterSchema, db: Session = Depends(get_db)):
+    """Register a new user account."""
+    # Check site config for signup
+    config = db.query(SiteConfig).filter(SiteConfig.id == 1).first()
+    if config and not config.signup_enabled:
+        raise HTTPException(400, "Registration is currently disabled")
+
+    if db.query(User).filter(User.username == data.username).first():
+        raise HTTPException(400, "Username already taken")
+    if db.query(User).filter(User.email == data.email).first():
+        raise HTTPException(400, "Email already registered")
+
+    max_monitors = config.max_free_monitors if config else 10
+
+    user = User(
+        username=data.username,
+        email=data.email,
+        password_hash=hash_password(data.password),
+        full_name=data.full_name,
+        max_monitors=max_monitors,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    token = create_jwt_token({"user_id": user.id, "role": user.role})
+
+    return {
+        "success": True,
+        "token": token,
+        "user": user.to_dict(),
+        "message": "Registration successful! Welcome to NeonWatch.",
+    }
+
+
+@app.post("/api/auth/login", tags=["Auth"])
+async def login(data: UserLoginSchema, db: Session = Depends(get_db)):
+    """Login with username/email and password."""
+    user = db.query(User).filter(
+        or_(User.username == data.login, User.email == data.login)
+    ).first()
+
+    if not user or not verify_password(data.password, user.password_hash):
+        raise HTTPException(401, "Invalid credentials")
+    if user.is_banned:
+        raise HTTPException(403, f"Account banned: {user.ban_reason or 'Contact admin'}")
+    if not user.is_active:
+        raise HTTPException(403, "Account deactivated")
+
+    user.last_login = datetime.utcnow()
+    db.commit()
+
+    token = create_jwt_token({"user_id": user.id, "role": user.role})
+
+    return {
+        "success": True,
+        "token": token,
+        "user": user.to_dict(),
+    }
+
+
+@app.get("/api/auth/me", tags=["Auth"])
+async def get_me(user: User = Depends(get_current_user)):
+    """Get current authenticated user info."""
+    return {"success": True, "user": user.to_dict()}
+
+
+@app.put("/api/auth/me", tags=["Auth"])
+async def update_me(
+    data: UserUpdateSchema,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Update current user's profile."""
+    for field, value in data.dict(exclude_unset=True).items():
+        setattr(user, field, value)
+    db.commit()
+    db.refresh(user)
+    return {"success": True, "user": user.to_dict()}
+
+
+@app.post("/api/auth/change-password", tags=["Auth"])
+async def change_password(
+    current_password: str = Body(...),
+    new_password: str = Body(...),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Change current user's password."""
+    if not verify_password(current_password, user.password_hash):
+        raise HTTPException(400, "Current password is incorrect")
+    user.password_hash = hash_password(new_password)
+    db.commit()
+    return {"success": True, "message": "Password updated"}
+
+
+# =============================================================================
+# SECTION 17: API ROUTES - Monitors CRUD
+# =============================================================================
+
+@app.get("/api/monitors", tags=["Monitors"])
+async def list_monitors(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=100),
+    status_filter: Optional[str] = Query(None),
+    type_filter: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+):
+    """List all monitors for the current user."""
+    cache_key = f"user_monitors:{user.id}:{page}:{limit}:{status_filter}:{type_filter}:{search}"
+    cached = cache_get(cache_key)
+    if cached:
+        return cached
+
+    query = db.query(Monitor).filter(Monitor.user_id == user.id)
+
+    if status_filter:
+        query = query.filter(Monitor.status == status_filter)
+    if type_filter:
+        query = query.filter(Monitor.monitor_type == type_filter)
+    if search:
+        query = query.filter(
+            or_(Monitor.name.ilike(f"%{search}%"), Monitor.url.ilike(f"%{search}%"))
+        )
+
+    total = query.count()
+    monitors = query.order_by(desc(Monitor.created_at)).offset(
+        (page - 1) * limit
+    ).limit(limit).all()
+
+    result = {
+        "success": True,
+        "monitors": [m.to_dict() for m in monitors],
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "pages": (total + limit - 1) // limit,
+    }
+
+    cache_set(cache_key, result, ttl=30)
+    return result
+
+
+@app.post("/api/monitors", tags=["Monitors"])
+async def create_monitor(
+    data: MonitorCreateSchema,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    background_tasks: BackgroundTasks = None,
+):
+    """Create a new monitor."""
+    current_count = db.query(Monitor).filter(Monitor.user_id == user.id).count()
+    if current_count >= user.max_monitors:
+        raise HTTPException(
+            400,
+            f"Monitor limit reached ({user.max_monitors}). Upgrade your plan.",
+        )
+
+    monitor = Monitor(
+        user_id=user.id,
+        name=data.name,
+        url=data.url,
+        monitor_type=data.monitor_type,
+        check_interval=data.check_interval,
+        timeout=data.timeout,
+        http_method=data.http_method,
+        http_headers=data.http_headers,
+        http_body=data.http_body,
+        expected_status_code=data.expected_status_code,
+        follow_redirects=data.follow_redirects,
+        verify_ssl=data.verify_ssl,
+        keyword=data.keyword,
+        keyword_should_exist=data.keyword_should_exist,
+        port=data.port,
+        alert_on_down=data.alert_on_down,
+        alert_on_recovery=data.alert_on_recovery,
+        alert_threshold=data.alert_threshold,
+        tags=json.dumps(data.tags) if data.tags else None,
+        notes=data.notes,
+    )
+    db.add(monitor)
+    db.commit()
+    db.refresh(monitor)
+
+    cache_delete(f"user_monitors:{user.id}")
+
+    # Run initial check
+    if background_tasks:
+        background_tasks.add_task(run_single_monitor_check, monitor.id)
+
+    return {"success": True, "monitor": monitor.to_dict(), "message": "Monitor created!"}
+
+
+@app.get("/api/monitors/{monitor_id}", tags=["Monitors"])
+async def get_monitor(
+    monitor_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Get detailed monitor info."""
+    monitor = db.query(Monitor).filter(
+        Monitor.id == monitor_id, Monitor.user_id == user.id
+    ).first()
+    if not monitor:
+        raise HTTPException(404, "Monitor not found")
+
+    # Get recent logs
+    logs = db.query(MonitorLog).filter(
+        MonitorLog.monitor_id == monitor.id
+    ).order_by(desc(MonitorLog.created_at)).limit(100).all()
+
+    # Get recent incidents
+    incidents = db.query(Incident).filter(
+        Incident.monitor_id == monitor.id
+    ).order_by(desc(Incident.started_at)).limit(20).all()
+
+    # Get daily stats for last 30 days
+    thirty_days_ago = datetime.utcnow().date() - timedelta(days=30)
+    daily = db.query(DailyStats).filter(
+        DailyStats.monitor_id == monitor.id,
+        DailyStats.date >= thirty_days_ago,
+    ).order_by(asc(DailyStats.date)).all()
+
+    return {
+        "success": True,
+        "monitor": monitor.to_dict(),
+        "logs": [l.to_dict() for l in logs],
+        "incidents": [i.to_dict() for i in incidents],
+        "daily_stats": [d.to_dict() for d in daily],
+    }
+
+
+@app.put("/api/monitors/{monitor_id}", tags=["Monitors"])
+async def update_monitor(
+    monitor_id: int,
+    data: MonitorUpdateSchema,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Update a monitor."""
+    monitor = db.query(Monitor).filter(
+        Monitor.id == monitor_id, Monitor.user_id == user.id
+    ).first()
+    if not monitor:
+        raise HTTPException(404, "Monitor not found")
+
+    update_data = data.dict(exclude_unset=True)
+    if "tags" in update_data:
+        update_data["tags"] = json.dumps(update_data["tags"]) if update_data["tags"] else None
+
+    for field, value in update_data.items():
+        setattr(monitor, field, value)
+
+    db.commit()
+    db.refresh(monitor)
+
+    cache_delete(f"monitor:{monitor.id}")
+    cache_delete(f"user_monitors:{user.id}")
+
+    return {"success": True, "monitor": monitor.to_dict()}
+
+
+@app.delete("/api/monitors/{monitor_id}", tags=["Monitors"])
+async def delete_monitor(
+    monitor_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Delete a monitor and all its data."""
+    monitor = db.query(Monitor).filter(
+        Monitor.id == monitor_id, Monitor.user_id == user.id
+    ).first()
+    if not monitor:
+        raise HTTPException(404, "Monitor not found")
+
+    db.delete(monitor)
+    db.commit()
+
+    cache_delete(f"monitor:{monitor_id}")
+    cache_delete(f"user_monitors:{user.id}")
+
+    return {"success": True, "message": "Monitor deleted"}
+
+
+@app.post("/api/monitors/{monitor_id}/check", tags=["Monitors"])
+async def trigger_check(
+    monitor_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    background_tasks: BackgroundTasks = None,
+):
+    """Manually trigger a monitor check."""
+    monitor = db.query(Monitor).filter(
+        Monitor.id == monitor_id, Monitor.user_id == user.id
+    ).first()
+    if not monitor:
+        raise HTTPException(404, "Monitor not found")
+
+    if background_tasks:
+        background_tasks.add_task(run_single_monitor_check, monitor.id)
+
+    return {"success": True, "message": "Check triggered"}
+
+
+@app.post("/api/monitors/{monitor_id}/pause", tags=["Monitors"])
+async def pause_monitor(
+    monitor_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Pause/unpause a monitor."""
+    monitor = db.query(Monitor).filter(
+        Monitor.id == monitor_id, Monitor.user_id == user.id
+    ).first()
+    if not monitor:
+        raise HTTPException(404, "Monitor not found")
+
+    if monitor.status == MonitorStatus.PAUSED.value:
+        monitor.status = MonitorStatus.PENDING.value
+        monitor.is_active = True
+        msg = "Monitor resumed"
+    else:
+        monitor.status = MonitorStatus.PAUSED.value
+        monitor.is_active = False
+        msg = "Monitor paused"
+
+    db.commit()
+    cache_delete(f"user_monitors:{user.id}")
+    return {"success": True, "message": msg, "status": monitor.status}
+
+
+# =============================================================================
+# SECTION 18: API ROUTES - Dashboard & Stats
+# =============================================================================
+
+@app.get("/api/dashboard", tags=["Dashboard"])
+async def get_dashboard(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Get dashboard overview data."""
+    monitors = db.query(Monitor).filter(Monitor.user_id == user.id).all()
+
+    total = len(monitors)
+    up = sum(1 for m in monitors if m.status == MonitorStatus.UP.value)
+    down = sum(1 for m in monitors if m.status == MonitorStatus.DOWN.value)
+    paused = sum(1 for m in monitors if m.status == MonitorStatus.PAUSED.value)
+    pending = total - up - down - paused
+
+    avg_uptime = 0
+    if monitors:
+        uptimes = [m.uptime_percentage for m in monitors if m.uptime_percentage is not None]
+        avg_uptime = sum(uptimes) / len(uptimes) if uptimes else 0
+
+    avg_response = 0
+    response_times = [m.last_response_time for m in monitors if m.last_response_time]
+    if response_times:
+        avg_response = sum(response_times) / len(response_times)
+
+    # Recent incidents
+    recent_incidents = db.query(Incident).join(Monitor).filter(
+        Monitor.user_id == user.id,
+    ).order_by(desc(Incident.started_at)).limit(10).all()
+
+    # Overall daily stats (last 30 days)
+    thirty_days_ago = datetime.utcnow().date() - timedelta(days=30)
+    daily_aggregated = db.query(
+        DailyStats.date,
+        func.avg(DailyStats.uptime_percentage).label("avg_uptime"),
+        func.avg(DailyStats.avg_response_time).label("avg_response_time"),
+    ).join(Monitor).filter(
+        Monitor.user_id == user.id,
+        DailyStats.date >= thirty_days_ago,
+    ).group_by(DailyStats.date).order_by(asc(DailyStats.date)).all()
+
+    return {
+        "success": True,
+        "overview": {
+            "total_monitors": total,
+            "up": up,
+            "down": down,
+            "paused": paused,
+            "pending": pending,
+            "avg_uptime": round(avg_uptime, 2),
+            "avg_response_time": round(avg_response, 2),
+        },
+        "monitors": [m.to_dict() for m in monitors],
+        "recent_incidents": [i.to_dict() for i in recent_incidents],
+        "daily_chart": [
+            {
+                "date": d.date.isoformat(),
+                "uptime": round(d.avg_uptime, 2) if d.avg_uptime else 100,
+                "response_time": round(d.avg_response_time, 2) if d.avg_response_time else 0,
+            }
+            for d in daily_aggregated
+        ],
+    }
+
+
+# =============================================================================
+# SECTION 19: API ROUTES - Site Config (Super Admin CMS)
+# =============================================================================
+
+@app.get("/api/site-config", tags=["Site Config"])
+async def get_site_config(db: Session = Depends(get_db)):
+    """Get public site configuration (no auth needed for theme data)."""
+    config = db.query(SiteConfig).filter(SiteConfig.id == 1).first()
+    if not config:
+        config = SiteConfig(id=1)
+        db.add(config)
+        db.commit()
+        db.refresh(config)
+    return {"success": True, "config": config.to_dict()}
+
+
+@app.put("/api/site-config", tags=["Site Config"])
+async def update_site_config(
+    data: SiteConfigUpdateSchema,
+    admin: User = Depends(require_superadmin),
+    db: Session = Depends(get_db),
+):
+    """Update site configuration (Super Admin only)."""
+    config = db.query(SiteConfig).filter(SiteConfig.id == 1).first()
+    if not config:
+        config = SiteConfig(id=1)
+        db.add(config)
+
+    for field, value in data.dict(exclude_unset=True).items():
+        setattr(config, field, value)
+
+    db.commit()
+    db.refresh(config)
+
+    cache_delete("site_config")
+
+    # Audit log
+    audit = AuditLog(
+        user_id=admin.id,
+        action="update_site_config",
+        target_type="site_config",
+        target_id=1,
+        details=json.dumps(data.dict(exclude_unset=True)),
+    )
+    db.add(audit)
+    db.commit()
+
+    return {"success": True, "config": config.to_dict(), "message": "Site config updated!"}
+
+
+# =============================================================================
+# SECTION 20: API ROUTES - Super Admin Panel
+# =============================================================================
+
+@app.get("/api/admin/users", tags=["Admin"])
+async def admin_list_users(
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=200),
+    search: Optional[str] = None,
+):
+    """List all users (Admin only)."""
+    query = db.query(User)
+    if search:
+        query = query.filter(
+            or_(
+                User.username.ilike(f"%{search}%"),
+                User.email.ilike(f"%{search}%"),
+                User.full_name.ilike(f"%{search}%"),
+            )
+        )
+    total = query.count()
+    users = query.order_by(desc(User.created_at)).offset(
+        (page - 1) * limit
+    ).limit(limit).all()
+
+    return {
+        "success": True,
+        "users": [u.to_dict() for u in users],
+        "total": total,
+        "page": page,
+    }
+
+
+@app.get("/api/admin/users/{user_id}", tags=["Admin"])
+async def admin_get_user(
+    user_id: int,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Get user details with all monitors (Admin only)."""
+    user = db.query(User).options(selectinload(User.monitors)).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(404, "User not found")
+    return {
+        "success": True,
+        "user": user.to_dict(),
+        "monitors": [m.to_dict() for m in user.monitors],
+    }
+
+
+@app.post("/api/admin/users/{user_id}/ban", tags=["Admin"])
+async def admin_ban_user(
+    user_id: int,
+    reason: str = Body("Violated terms of service"),
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Ban a user (Admin only)."""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(404, "User not found")
+    if user.role == UserRole.SUPERADMIN.value:
+        raise HTTPException(403, "Cannot ban a superadmin")
+
+    user.is_banned = True
+    user.ban_reason = reason
+    db.commit()
+
+    audit = AuditLog(
+        user_id=admin.id, action="ban_user",
+        target_type="user", target_id=user_id,
+        details=f"Reason: {reason}",
+    )
+    db.add(audit)
+    db.commit()
+
+    return {"success": True, "message": f"User {user.username} banned"}
+
+
+@app.post("/api/admin/users/{user_id}/unban", tags=["Admin"])
+async def admin_unban_user(
+    user_id: int,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Unban a user."""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(404, "User not found")
+    user.is_banned = False
+    user.ban_reason = None
+    db.commit()
+    return {"success": True, "message": f"User {user.username} unbanned"}
+
+
+@app.put("/api/admin/users/{user_id}/role", tags=["Admin"])
+async def admin_change_role(
+    user_id: int,
+    role: str = Body(...),
+    admin: User = Depends(require_superadmin),
+    db: Session = Depends(get_db),
+):
+    """Change a user's role (Superadmin only)."""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(404, "User not found")
+    if role not in [r.value for r in UserRole]:
+        raise HTTPException(400, f"Invalid role. Must be one of: {[r.value for r in UserRole]}")
+    user.role = role
+    db.commit()
+    return {"success": True, "message": f"User role updated to {role}"}
+
+
+@app.put("/api/admin/users/{user_id}/plan", tags=["Admin"])
+async def admin_change_plan(
+    user_id: int,
+    plan: str = Body(...),
+    max_monitors: int = Body(10),
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Change a user's plan (Admin only)."""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(404, "User not found")
+    user.plan = plan
+    user.max_monitors = max_monitors
+    db.commit()
+    return {"success": True, "message": f"User plan updated to {plan}"}
+
+
+@app.get("/api/admin/stats", tags=["Admin"])
+async def admin_global_stats(
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Get global system statistics."""
+    total_users = db.query(User).count()
+    active_users = db.query(User).filter(User.is_active == True, User.is_banned == False).count()
+    total_monitors = db.query(Monitor).count()
+    active_monitors = db.query(Monitor).filter(Monitor.is_active == True).count()
+    total_checks = db.query(func.sum(Monitor.total_checks)).scalar() or 0
+    total_incidents = db.query(Incident).count()
+    open_incidents = db.query(Incident).filter(Incident.is_resolved == False).count()
+
+    # User signups last 7 days
+    week_ago = datetime.utcnow() - timedelta(days=7)
+    new_users_week = db.query(User).filter(User.created_at >= week_ago).count()
+
+    # Monitors by type
+    type_distribution = db.query(
+        Monitor.monitor_type, func.count(Monitor.id)
+    ).group_by(Monitor.monitor_type).all()
+
+    # Plan distribution
+    plan_distribution = db.query(
+        User.plan, func.count(User.id)
+    ).group_by(User.plan).all()
+
+    return {
+        "success": True,
+        "stats": {
+            "total_users": total_users,
+            "active_users": active_users,
+            "new_users_week": new_users_week,
+            "total_monitors": total_monitors,
+            "active_monitors": active_monitors,
+            "total_checks": total_checks,
+            "total_incidents": total_incidents,
+            "open_incidents": open_incidents,
+            "monitor_types": {t: c for t, c in type_distribution},
+            "plan_distribution": {p: c for p, c in plan_distribution},
+        },
+    }
+
+
+@app.get("/api/admin/audit-logs", tags=["Admin"])
+async def admin_audit_logs(
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=200),
+):
+    """Get audit logs."""
+    total = db.query(AuditLog).count()
+    logs = db.query(AuditLog).order_by(
+        desc(AuditLog.created_at)
+    ).offset((page - 1) * limit).limit(limit).all()
+
+    return {
+        "success": True,
+        "logs": [l.to_dict() for l in logs],
+        "total": total,
+        "page": page,
+    }
+
+
+@app.get("/api/admin/monitors", tags=["Admin"])
+async def admin_list_all_monitors(
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=200),
+):
+    """List all monitors across all users (Admin only)."""
+    total = db.query(Monitor).count()
+    monitors = db.query(Monitor).options(joinedload(Monitor.owner)).order_by(
+        desc(Monitor.created_at)
+    ).offset((page - 1) * limit).limit(limit).all()
+
+    result = []
+    for m in monitors:
+        md = m.to_dict()
+        md["owner_username"] = m.owner.username if m.owner else "Unknown"
+        md["owner_email"] = m.owner.email if m.owner else "Unknown"
+        result.append(md)
+
+    return {"success": True, "monitors": result, "total": total, "page": page}
+
+
+# =============================================================================
+# SECTION 21: API ROUTES - Alert Contacts
+# =============================================================================
+
+@app.get("/api/alert-contacts", tags=["Alerts"])
+async def list_alert_contacts(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    contacts = db.query(AlertContact).filter(AlertContact.user_id == user.id).all()
+    return {"success": True, "contacts": [c.to_dict() for c in contacts]}
+
+
+@app.post("/api/alert-contacts", tags=["Alerts"])
+async def create_alert_contact(
+    data: AlertContactSchema,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    contact = AlertContact(
+        user_id=user.id,
+        name=data.name,
+        alert_type=data.alert_type,
+        value=data.value,
+    )
+    db.add(contact)
+    db.commit()
+    db.refresh(contact)
+    return {"success": True, "contact": contact.to_dict()}
+
+
+@app.delete("/api/alert-contacts/{contact_id}", tags=["Alerts"])
+async def delete_alert_contact(
+    contact_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    contact = db.query(AlertContact).filter(
+        AlertContact.id == contact_id, AlertContact.user_id == user.id
+    ).first()
+    if not contact:
+        raise HTTPException(404, "Contact not found")
+    db.delete(contact)
+    db.commit()
+    return {"success": True, "message": "Contact deleted"}
+
+
+# =============================================================================
+# SECTION 22: API ROUTES - Status Pages
+# =============================================================================
+
+@app.get("/api/status-pages", tags=["Status Pages"])
+async def list_status_pages(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    pages = db.query(StatusPage).filter(StatusPage.user_id == user.id).all()
+    return {"success": True, "pages": [p.to_dict() for p in pages]}
+
+
+@app.post("/api/status-pages", tags=["Status Pages"])
+async def create_status_page(
+    data: StatusPageSchema,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if db.query(StatusPage).filter(StatusPage.slug == data.slug).first():
+        raise HTTPException(400, "Slug already taken")
+
+    page = StatusPage(
+        user_id=user.id,
+        slug=data.slug,
+        title=data.title,
+        description=data.description,
+        monitor_ids=json.dumps(data.monitor_ids) if data.monitor_ids else None,
+        is_public=data.is_public,
+    )
+    db.add(page)
+    db.commit()
+    db.refresh(page)
+    return {"success": True, "page": page.to_dict()}
+
+
+@app.get("/api/status/{slug}", tags=["Status Pages"])
+async def get_public_status_page(slug: str, db: Session = Depends(get_db)):
+    """Get a public status page by slug (no auth required)."""
+    page = db.query(StatusPage).filter(StatusPage.slug == slug, StatusPage.is_public == True).first()
+    if not page:
+        raise HTTPException(404, "Status page not found")
+
+    monitor_ids = json.loads(page.monitor_ids) if page.monitor_ids else []
+    monitors = db.query(Monitor).filter(Monitor.id.in_(monitor_ids)).all() if monitor_ids else []
+
+    # Get 30-day stats for each monitor
+    thirty_days_ago = datetime.utcnow().date() - timedelta(days=30)
+    monitor_data = []
+    for m in monitors:
+        daily = db.query(DailyStats).filter(
+            DailyStats.monitor_id == m.id,
+            DailyStats.date >= thirty_days_ago,
+        ).order_by(asc(DailyStats.date)).all()
+        monitor_data.append({
+            "name": m.name,
+            "status": m.status,
+            "uptime_percentage": m.uptime_percentage,
+            "last_response_time": m.last_response_time,
+            "daily": [d.to_dict() for d in daily],
+        })
+
+    overall_uptime = 0
+    if monitors:
+        uptimes = [m.uptime_percentage for m in monitors if m.uptime_percentage is not None]
+        overall_uptime = sum(uptimes) / len(uptimes) if uptimes else 100
+
+    return {
+        "success": True,
+        "page": page.to_dict(),
+        "monitors": monitor_data,
+        "overall_uptime": round(overall_uptime, 2),
+    }
+
+
+# =============================================================================
+# SECTION 23: WEBSOCKET - Real-Time Updates
+# =============================================================================
+
+connected_clients: Dict[int, List[WebSocket]] = {}
+
+
+@app.websocket("/ws/{user_id}")
+async def websocket_endpoint(websocket: WebSocket, user_id: int):
+    """WebSocket endpoint for real-time monitor updates."""
+    await websocket.accept()
+
+    if user_id not in connected_clients:
+        connected_clients[user_id] = []
+    connected_clients[user_id].append(websocket)
+
+    try:
+        while True:
+            data = await websocket.receive_text()
+            # Heartbeat
+            if data == "ping":
+                await websocket.send_text("pong")
+    except WebSocketDisconnect:
+        connected_clients[user_id].remove(websocket)
+        if not connected_clients[user_id]:
+            del connected_clients[user_id]
+
+
+async def notify_user(user_id: int, data: dict):
+    """Send real-time notification to connected user."""
+    if user_id in connected_clients:
+        for ws in connected_clients[user_id]:
+            try:
+                await ws.send_json(data)
+            except Exception:
+                pass
+
+
+# =============================================================================
+# SECTION 24: HEALTH CHECK ENDPOINT
+# =============================================================================
+
+@app.get("/api/health", tags=["System"])
+async def health_check():
+    """System health check."""
+    checks = {
+        "status": "healthy",
+        "version": settings.APP_VERSION,
+        "database": "connected",
+        "redis": "connected" if redis_client else "unavailable",
+        "celery": "available" if CELERY_AVAILABLE else "unavailable",
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+    try:
+        db = SessionLocal()
+        db.execute("SELECT 1" if USE_POSTGRES else "SELECT 1")
+        db.close()
+    except Exception:
+        checks["database"] = "error"
+        checks["status"] = "degraded"
+
+    return checks
+
+
+# =============================================================================
+# SECTION 25: FULL FRONTEND (React + Tailwind CSS - Inline HTML/JS/CSS)
+# =============================================================================
+
+FRONTEND_HTML = """
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en" class="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🔥 Novel Scraper Engine</title>
+    <title id="page-title">NeonWatch - God Level Uptime Monitoring</title>
+    <meta name="description" content="God-level uptime monitoring SaaS with neon pink & purple theme">
+
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React CDN -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <!-- Lucide Icons -->
+    <link rel="stylesheet" href="https://unpkg.com/lucide-static@latest/font/lucide.css">
+
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        'neon-pink': '#F806CC',
+                        'neon-purple': '#A855F7',
+                        'deep-purple': '#2E0249',
+                        'darker-purple': '#1A0130',
+                        'mid-purple': '#570A57',
+                        'glow-pink': '#FF2CF1',
+                        'electric-violet': '#8B5CF6',
+                        'neon-green': '#00FF88',
+                        'neon-red': '#FF1744',
+                        'neon-yellow': '#FFE500',
+                        'glass-white': 'rgba(255,255,255,0.08)',
+                        'glass-border': 'rgba(248,6,204,0.3)',
+                    },
+                    boxShadow: {
+                        'neon': '0 0 20px rgba(248,6,204,0.5), 0 0 60px rgba(248,6,204,0.2)',
+                        'neon-lg': '0 0 30px rgba(248,6,204,0.6), 0 0 80px rgba(248,6,204,0.3)',
+                        'neon-purple': '0 0 20px rgba(168,85,247,0.5), 0 0 60px rgba(168,85,247,0.2)',
+                        'neon-green': '0 0 15px rgba(0,255,136,0.6)',
+                        'neon-red': '0 0 15px rgba(255,23,68,0.6)',
+                        'glass': '0 8px 32px rgba(0,0,0,0.37)',
+                    },
+                    animation: {
+                        'glow-pulse': 'glowPulse 2s ease-in-out infinite alternate',
+                        'float': 'float 6s ease-in-out infinite',
+                        'slide-up': 'slideUp 0.5s ease-out',
+                        'fade-in': 'fadeIn 0.5s ease-out',
+                        'spin-slow': 'spin 8s linear infinite',
+                    },
+                    keyframes: {
+                        glowPulse: {
+                            '0%': { filter: 'drop-shadow(0 0 10px #F806CC) drop-shadow(0 0 30px #A855F7)' },
+                            '100%': { filter: 'drop-shadow(0 0 20px #F806CC) drop-shadow(0 0 50px #A855F7) drop-shadow(0 0 70px #F806CC)' },
+                        },
+                        float: {
+                            '0%, 100%': { transform: 'translateY(0px)' },
+                            '50%': { transform: 'translateY(-10px)' },
+                        },
+                        slideUp: {
+                            '0%': { opacity: '0', transform: 'translateY(30px)' },
+                            '100%': { opacity: '1', transform: 'translateY(0)' },
+                        },
+                        fadeIn: {
+                            '0%': { opacity: '0' },
+                            '100%': { opacity: '1' },
+                        },
+                    },
+                    backdropBlur: {
+                        'xs': '2px',
+                        'glass': '20px',
+                    },
+                },
+            },
+        }
+    </script>
+
     <style>
-        :root {
-            --bg-primary: #0d0d0d;
-            --bg-secondary: #1a1a2e;
-            --bg-card: #16213e;
-            --bg-input: #0f3460;
-            --text-primary: #e94560;
-            --text-secondary: #f5c6d0;
-            --text-white: #ffffff;
-            --accent-pink: #e94560;
-            --accent-purple: #a855f7;
-            --accent-hot: #ff2e63;
-            --accent-glow: #ff6b9d;
-            --border-color: #e94560;
-            --success: #00e676;
-            --error: #ff1744;
-            --warning: #ffab00;
-            --info: #00b0ff;
-            --gradient-1: linear-gradient(135deg, #e94560, #a855f7);
-            --gradient-2: linear-gradient(135deg, #0f3460, #1a1a2e);
-            --shadow-glow: 0 0 20px rgba(233, 69, 96, 0.3);
-        }
-        [data-theme="light"] {
-            --bg-primary: #fdf2f8;
-            --bg-secondary: #fce7f3;
-            --bg-card: #ffffff;
-            --bg-input: #fdf2f8;
-            --text-primary: #be185d;
-            --text-secondary: #9d174d;
-            --text-white: #1a1a1a;
-            --border-color: #ec4899;
-            --shadow-glow: 0 0 20px rgba(236, 72, 153, 0.2);
-        }
-        * { margin: 0; padding: 0; box-sizing: border-box; }
+        /* ==================== GLOBAL STYLES ==================== */
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;600&display=swap');
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        html { scroll-behavior: smooth; }
+
         body {
-            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
-            background: var(--bg-primary);
-            color: var(--text-white);
+            font-family: 'Inter', sans-serif;
+            background: #0D0015;
+            color: #e2e8f0;
             min-height: 100vh;
             overflow-x: hidden;
         }
-        .top-bar {
-            background: var(--gradient-1);
-            padding: 12px 30px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            box-shadow: 0 4px 20px rgba(233,69,96,0.4);
-            position: sticky;
-            top: 0;
-            z-index: 100;
+
+        /* Background Video */
+        #bg-video-container {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            z-index: -2; overflow: hidden;
         }
-        .top-bar h1 {
-            font-size: 1.5em;
-            font-weight: 800;
-            letter-spacing: 1px;
+        #bg-video-container video {
+            width: 100%; height: 100%; object-fit: cover;
         }
-        .top-bar .controls {
-            display: flex;
-            gap: 12px;
-            align-items: center;
+
+        /* Dark overlay over video */
+        #bg-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            z-index: -1;
+            background: linear-gradient(135deg,
+                rgba(13,0,21,0.88) 0%,
+                rgba(46,2,73,0.85) 30%,
+                rgba(87,10,87,0.82) 60%,
+                rgba(13,0,21,0.90) 100%);
         }
-        .theme-toggle {
-            background: rgba(255,255,255,0.2);
-            border: none;
-            color: white;
-            padding: 8px 16px;
-            border-radius: 20px;
-            cursor: pointer;
-            font-size: 14px;
-            transition: 0.3s;
+
+        /* Animated gradient background fallback */
+        .animated-bg {
+            background: linear-gradient(-45deg, #0D0015, #2E0249, #570A57, #1A0130);
+            background-size: 400% 400%;
+            animation: gradientShift 15s ease infinite;
         }
-        .theme-toggle:hover { background: rgba(255,255,255,0.3); }
-        .container {
-            max-width: 1400px;
-            margin: 0 auto;
-            padding: 20px;
+
+        @keyframes gradientShift {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
         }
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 16px;
-            margin-bottom: 24px;
-        }
-        .stat-card {
-            background: var(--bg-card);
-            border: 1px solid var(--border-color);
-            border-radius: 12px;
-            padding: 20px;
-            text-align: center;
-            box-shadow: var(--shadow-glow);
-            transition: transform 0.3s, box-shadow 0.3s;
-        }
-        .stat-card:hover {
-            transform: translateY(-3px);
-            box-shadow: 0 0 30px rgba(233,69,96,0.5);
-        }
-        .stat-card .label {
-            font-size: 12px;
-            color: var(--text-secondary);
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            margin-bottom: 8px;
-        }
-        .stat-card .value {
-            font-size: 1.8em;
-            font-weight: 800;
-            color: var(--accent-pink);
-        }
-        .card {
-            background: var(--bg-card);
-            border: 1px solid var(--border-color);
+
+        /* Glassmorphism Card */
+        .glass-card {
+            background: rgba(13, 0, 21, 0.6);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(248, 6, 204, 0.15);
             border-radius: 16px;
-            padding: 24px;
-            margin-bottom: 24px;
-            box-shadow: var(--shadow-glow);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4),
+                        inset 0 1px 0 rgba(255,255,255,0.05);
         }
-        .card h2 {
-            color: var(--accent-pink);
-            margin-bottom: 20px;
-            font-size: 1.3em;
-            display: flex;
-            align-items: center;
-            gap: 10px;
+        .glass-card:hover {
+            border-color: rgba(248, 6, 204, 0.35);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4),
+                        0 0 20px rgba(248, 6, 204, 0.1),
+                        inset 0 1px 0 rgba(255,255,255,0.05);
         }
-        .form-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: 16px;
+
+        /* Logo glow animation */
+        .logo-glow {
+            animation: logoGlow 2s ease-in-out infinite alternate;
         }
-        .form-group {
-            display: flex;
-            flex-direction: column;
-            gap: 6px;
+        @keyframes logoGlow {
+            0% {
+                text-shadow: 0 0 10px #F806CC, 0 0 20px #F806CC, 0 0 40px #A855F7;
+                filter: brightness(1);
+            }
+            100% {
+                text-shadow: 0 0 20px #F806CC, 0 0 40px #F806CC, 0 0 60px #A855F7, 0 0 80px #F806CC;
+                filter: brightness(1.2);
+            }
         }
-        .form-group label {
-            font-size: 13px;
-            color: var(--text-secondary);
-            font-weight: 600;
-        }
-        .form-group input, .form-group select, .form-group textarea {
-            background: var(--bg-input);
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            padding: 10px 14px;
-            color: var(--text-white);
-            font-size: 14px;
-            transition: 0.3s;
-            outline: none;
-        }
-        .form-group input:focus, .form-group select:focus, .form-group textarea:focus {
-            border-color: var(--accent-hot);
-            box-shadow: 0 0 10px rgba(233,69,96,0.3);
-        }
-        .btn {
-            padding: 10px 24px;
+
+        /* Neon button */
+        .neon-btn {
+            background: linear-gradient(135deg, #F806CC, #A855F7);
             border: none;
-            border-radius: 8px;
-            cursor: pointer;
-            font-weight: 700;
-            font-size: 14px;
-            transition: all 0.3s;
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-        }
-        .btn-primary {
-            background: var(--gradient-1);
             color: white;
+            font-weight: 600;
+            padding: 10px 24px;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 0 15px rgba(248,6,204,0.3);
         }
-        .btn-primary:hover {
-            box-shadow: 0 0 20px rgba(233,69,96,0.5);
+        .neon-btn:hover {
+            box-shadow: 0 0 25px rgba(248,6,204,0.6), 0 0 50px rgba(168,85,247,0.3);
             transform: translateY(-2px);
         }
-        .btn-success { background: var(--success); color: #000; }
-        .btn-danger { background: var(--error); color: white; }
-        .btn-warning { background: var(--warning); color: #000; }
-        .btn-info { background: var(--info); color: white; }
-        .btn-sm { padding: 6px 14px; font-size: 12px; }
-        .btn-group { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
-        .progress-container {
-            background: var(--bg-secondary);
-            border-radius: 10px;
-            overflow: hidden;
-            height: 28px;
-            margin: 12px 0;
-            position: relative;
-        }
-        .progress-bar {
-            height: 100%;
-            background: var(--gradient-1);
-            border-radius: 10px;
-            transition: width 0.5s ease;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 12px;
-            font-weight: 700;
-            color: white;
-            min-width: 40px;
-        }
-        .log-box {
-            background: #0a0a0a;
-            border: 1px solid #333;
-            border-radius: 8px;
-            padding: 16px;
-            max-height: 400px;
-            overflow-y: auto;
-            font-family: 'Consolas', 'Monaco', monospace;
-            font-size: 12px;
-            line-height: 1.6;
-            color: #aaa;
-        }
-        .log-box .log-error { color: #ff4444; }
-        .log-box .log-warning { color: #ffaa00; }
-        .log-box .log-info { color: #44aaff; }
-        .log-box .log-success { color: #44ff44; }
-        .job-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 13px;
-        }
-        .job-table th {
-            background: var(--bg-secondary);
-            color: var(--accent-pink);
-            padding: 12px;
-            text-align: left;
-            font-weight: 700;
-        }
-        .job-table td {
-            padding: 10px 12px;
-            border-bottom: 1px solid rgba(233,69,96,0.1);
-        }
-        .job-table tr:hover { background: rgba(233,69,96,0.05); }
-        .status-badge {
-            padding: 4px 12px;
+
+        .neon-btn-outline {
+            background: transparent;
+            border: 2px solid #F806CC;
+            color: #F806CC;
+            padding: 10px 24px;
             border-radius: 12px;
-            font-size: 11px;
-            font-weight: 700;
-            text-transform: uppercase;
-        }
-        .status-running { background: rgba(0,176,255,0.2); color: var(--info); }
-        .status-completed { background: rgba(0,230,118,0.2); color: var(--success); }
-        .status-failed { background: rgba(255,23,68,0.2); color: var(--error); }
-        .status-paused { background: rgba(255,171,0,0.2); color: var(--warning); }
-        .status-pending { background: rgba(255,255,255,0.1); color: #888; }
-        .status-cancelled { background: rgba(255,23,68,0.1); color: #ff6666; }
-        .tabs {
-            display: flex;
-            gap: 4px;
-            margin-bottom: 20px;
-            flex-wrap: wrap;
-        }
-        .tab {
-            padding: 10px 20px;
-            background: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            border-radius: 8px 8px 0 0;
             cursor: pointer;
-            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+        .neon-btn-outline:hover {
+            background: rgba(248,6,204,0.15);
+            box-shadow: 0 0 20px rgba(248,6,204,0.3);
+        }
+
+        /* Neon Input */
+        .neon-input {
+            background: rgba(13,0,21,0.6);
+            border: 1px solid rgba(248,6,204,0.2);
+            color: #e2e8f0;
+            padding: 12px 16px;
+            border-radius: 12px;
+            outline: none;
+            transition: all 0.3s ease;
+            width: 100%;
             font-size: 14px;
-            color: var(--text-secondary);
-            transition: 0.3s;
         }
-        .tab.active {
-            background: var(--gradient-1);
-            color: white;
-            border-color: var(--accent-pink);
+        .neon-input:focus {
+            border-color: #F806CC;
+            box-shadow: 0 0 15px rgba(248,6,204,0.2);
         }
-        .tab-content { display: none; }
-        .tab-content.active { display: block; }
-        .chapters-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(60px, 1fr));
-            gap: 4px;
-            max-height: 300px;
-            overflow-y: auto;
+        .neon-input::placeholder {
+            color: rgba(255,255,255,0.3);
         }
-        .ch-cell {
-            padding: 6px;
-            text-align: center;
-            border-radius: 4px;
-            font-size: 11px;
-            font-weight: 600;
+
+        /* Status dots */
+        .status-dot {
+            width: 12px; height: 12px;
+            border-radius: 50%;
+            display: inline-block;
         }
-        .ch-success { background: rgba(0,230,118,0.3); color: var(--success); }
-        .ch-failed { background: rgba(255,23,68,0.3); color: var(--error); }
-        .ch-pending { background: rgba(255,255,255,0.05); color: #666; }
-        .ch-fetching { background: rgba(0,176,255,0.3); color: var(--info); }
-        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-        .pulse { animation: pulse 1.5s infinite; }
-        .hidden { display: none; }
+        .status-up {
+            background: #00FF88;
+            box-shadow: 0 0 10px #00FF88, 0 0 20px rgba(0,255,136,0.3);
+            animation: statusPulse 2s ease-in-out infinite;
+        }
+        .status-down {
+            background: #FF1744;
+            box-shadow: 0 0 10px #FF1744, 0 0 20px rgba(255,23,68,0.3);
+            animation: statusPulse 1s ease-in-out infinite;
+        }
+        .status-pending {
+            background: #FFE500;
+            box-shadow: 0 0 10px #FFE500;
+        }
+        .status-paused {
+            background: #888;
+            box-shadow: 0 0 5px #888;
+        }
+
+        @keyframes statusPulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.7; transform: scale(1.2); }
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #0D0015; }
+        ::-webkit-scrollbar-thumb {
+            background: linear-gradient(#F806CC, #A855F7);
+            border-radius: 3px;
+        }
+
+        /* Music toggle */
+        .music-toggle {
+            position: fixed; bottom: 20px; right: 20px; z-index: 1000;
+            background: rgba(13,0,21,0.8);
+            border: 1px solid rgba(248,6,204,0.3);
+            border-radius: 50%;
+            width: 50px; height: 50px;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+        }
+        .music-toggle:hover {
+            border-color: #F806CC;
+            box-shadow: 0 0 20px rgba(248,6,204,0.4);
+        }
+        .music-toggle.playing {
+            animation: musicBounce 1s ease-in-out infinite;
+        }
+        @keyframes musicBounce {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+        }
+
+        /* Uptime bar */
+        .uptime-bar {
+            display: flex; gap: 2px; height: 30px; align-items: flex-end;
+        }
+        .uptime-bar-segment {
+            flex: 1; min-width: 3px; border-radius: 2px;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+        .uptime-bar-segment:hover {
+            opacity: 0.8;
+            transform: scaleY(1.2);
+        }
+
+        /* Toast notification */
+        .toast {
+            position: fixed; top: 20px; right: 20px; z-index: 9999;
+            padding: 16px 24px;
+            border-radius: 12px;
+            backdrop-filter: blur(20px);
+            animation: slideInRight 0.5s ease-out;
+            max-width: 400px;
+        }
+        .toast-success {
+            background: rgba(0,255,136,0.15);
+            border: 1px solid rgba(0,255,136,0.3);
+            color: #00FF88;
+        }
+        .toast-error {
+            background: rgba(255,23,68,0.15);
+            border: 1px solid rgba(255,23,68,0.3);
+            color: #FF1744;
+        }
+        @keyframes slideInRight {
+            0% { transform: translateX(100%); opacity: 0; }
+            100% { transform: translateX(0); opacity: 1; }
+        }
+
+        /* Sidebar */
+        .sidebar {
+            background: rgba(13,0,21,0.85);
+            backdrop-filter: blur(20px);
+            border-right: 1px solid rgba(248,6,204,0.1);
+        }
+        .sidebar-link {
+            display: flex; align-items: center; gap: 12px;
+            padding: 12px 20px; border-radius: 10px;
+            color: rgba(255,255,255,0.6);
+            transition: all 0.3s ease;
+            text-decoration: none;
+            cursor: pointer;
+        }
+        .sidebar-link:hover, .sidebar-link.active {
+            background: rgba(248,6,204,0.1);
+            color: #F806CC;
+            border-left: 3px solid #F806CC;
+        }
+
+        /* Particles */
+        .particle {
+            position: fixed;
+            background: radial-gradient(circle, #F806CC, transparent);
+            border-radius: 50%;
+            pointer-events: none;
+            opacity: 0.15;
+            animation: floatParticle 20s linear infinite;
+        }
+        @keyframes floatParticle {
+            0% { transform: translateY(100vh) rotate(0deg); opacity: 0; }
+            10% { opacity: 0.15; }
+            90% { opacity: 0.15; }
+            100% { transform: translateY(-100vh) rotate(720deg); opacity: 0; }
+        }
+
+        /* Responsive */
         @media (max-width: 768px) {
-            .container { padding: 10px; }
-            .stats-grid { grid-template-columns: repeat(2, 1fr); }
-            .form-grid { grid-template-columns: 1fr; }
+            .sidebar { display: none; }
+            .sidebar.mobile-open { display: block; position: fixed; z-index: 999; width: 260px; height: 100vh; }
+        }
+
+        /* Stat card shimmer effect */
+        .shimmer {
+            background: linear-gradient(90deg,
+                rgba(248,6,204,0) 0%,
+                rgba(248,6,204,0.08) 50%,
+                rgba(248,6,204,0) 100%);
+            background-size: 200% 100%;
+            animation: shimmerEffect 2s infinite;
+        }
+        @keyframes shimmerEffect {
+            0% { background-position: -200% 0; }
+            100% { background-position: 200% 0; }
+        }
+
+        /* Monitor card status stripe */
+        .monitor-card { position: relative; overflow: hidden; }
+        .monitor-card::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0;
+            width: 4px; height: 100%;
+        }
+        .monitor-card.status-card-up::before { background: #00FF88; box-shadow: 0 0 10px #00FF88; }
+        .monitor-card.status-card-down::before { background: #FF1744; box-shadow: 0 0 10px #FF1744; }
+        .monitor-card.status-card-pending::before { background: #FFE500; }
+        .monitor-card.status-card-paused::before { background: #888; }
+
+        /* Select styling */
+        .neon-select {
+            background: rgba(13,0,21,0.6);
+            border: 1px solid rgba(248,6,204,0.2);
+            color: #e2e8f0;
+            padding: 12px 16px;
+            border-radius: 12px;
+            outline: none;
+            appearance: none;
+            cursor: pointer;
+            width: 100%;
+        }
+        .neon-select:focus {
+            border-color: #F806CC;
+            box-shadow: 0 0 15px rgba(248,6,204,0.2);
+        }
+
+        /* Spinner */
+        .spinner {
+            border: 3px solid rgba(248,6,204,0.2);
+            border-top: 3px solid #F806CC;
+            border-radius: 50%;
+            width: 40px; height: 40px;
+            animation: spin 0.8s linear infinite;
+        }
+
+        /* Toggle switch */
+        .toggle-switch {
+            position: relative;
+            width: 48px; height: 24px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 24px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .toggle-switch.active {
+            background: linear-gradient(135deg, #F806CC, #A855F7);
+        }
+        .toggle-switch::after {
+            content: '';
+            position: absolute;
+            top: 2px; left: 2px;
+            width: 20px; height: 20px;
+            background: white;
+            border-radius: 50%;
+            transition: all 0.3s ease;
+        }
+        .toggle-switch.active::after {
+            left: 26px;
+        }
+
+        /* Tab styles */
+        .tab-btn {
+            padding: 10px 20px;
+            border-radius: 10px;
+            color: rgba(255,255,255,0.5);
+            cursor: pointer;
+            transition: all 0.3s ease;
+            border: 1px solid transparent;
+        }
+        .tab-btn.active {
+            background: rgba(248,6,204,0.15);
+            color: #F806CC;
+            border-color: rgba(248,6,204,0.3);
+        }
+        .tab-btn:hover {
+            color: #F806CC;
         }
     </style>
 </head>
 <body>
-    <div class="top-bar">
-        <h1>🔥 Novel Scraper Engine</h1>
-        <div class="controls">
-            <span id="clock" style="font-size:13px;opacity:0.8;"></span>
-            <button class="theme-toggle" onclick="toggleTheme()">🌓 Theme</button>
-        </div>
-    </div>
+    <div id="root"></div>
 
-    <div class="container">
-        <!-- System Stats -->
-        <div class="stats-grid" id="systemStats">
-            <div class="stat-card"><div class="label">CPU Usage</div><div class="value" id="cpuUsage">--%</div></div>
-            <div class="stat-card"><div class="label">RAM Usage</div><div class="value" id="ramUsage">--%</div></div>
-            <div class="stat-card"><div class="label">Active Jobs</div><div class="value" id="activeJobs">0</div></div>
-            <div class="stat-card"><div class="label">Total Jobs</div><div class="value" id="totalJobs">0</div></div>
-            <div class="stat-card"><div class="label">Disk Free</div><div class="value" id="diskFree">--</div></div>
-        </div>
+    <!-- Background Video Container -->
+    <div id="bg-video-container"></div>
+    <div id="bg-overlay" class="animated-bg"></div>
 
-        <!-- Tabs -->
-        <div class="tabs">
-            <div class="tab active" onclick="switchTab('newJob')">🚀 New Job</div>
-            <div class="tab" onclick="switchTab('jobs')">📋 Jobs</div>
-            <div class="tab" onclick="switchTab('monitor')">📊 Monitor</div>
-            <div class="tab" onclick="switchTab('logs')">📝 Logs</div>
-            <div class="tab" onclick="switchTab('downloads')">📥 Downloads</div>
-        </div>
+    <!-- Background Audio -->
+    <audio id="bg-audio" loop preload="none"></audio>
 
-        <!-- New Job Tab -->
-        <div class="tab-content active" id="tab-newJob">
-            <div class="card">
-                <h2>🚀 Create New Scraping Job</h2>
-                <form id="newJobForm" onsubmit="createJob(event)">
-                    <div class="form-grid">
-                        <div class="form-group">
-                            <label>📖 Novel Name</label>
-                            <input type="text" name="novel_name" placeholder="My Novel" required>
-                        </div>
-                        <div class="form-group">
-                            <label>🔧 Scrape Mode</label>
-                            <select name="scrape_mode" onchange="toggleMode(this.value)">
-                                <option value="pattern">Pattern Mode (URL + Range)</option>
-                                <option value="smart">Smart Detect (Auto Next)</option>
-                            </select>
-                        </div>
-                        <div class="form-group pattern-field">
-                            <label>🔗 URL Pattern (use {} for chapter number)</label>
-                            <input type="text" name="url_pattern" placeholder="https://example.com/novel/chapter-{}.html">
-                        </div>
-                        <div class="form-group pattern-field">
-                            <label>📗 Start Chapter</label>
-                            <input type="number" name="start_chapter" value="1" min="1">
-                        </div>
-                        <div class="form-group pattern-field">
-                            <label>📕 End Chapter</label>
-                            <input type="number" name="end_chapter" value="100" min="1">
-                        </div>
-                        <div class="form-group smart-field hidden">
-                            <label>🔗 Start URL</label>
-                            <input type="text" name="start_url" placeholder="https://example.com/novel/chapter-1.html">
-                        </div>
-                        <div class="form-group">
-                            <label>🎯 Content CSS Selector (optional)</label>
-                            <input type="text" name="content_selector" placeholder="#content or .chapter-text">
-                        </div>
-                        <div class="form-group">
-                            <label>📌 Title CSS Selector (optional)</label>
-                            <input type="text" name="title_selector" placeholder="h1.chapter-title">
-                        </div>
-                        <div class="form-group smart-field hidden">
-                            <label>➡️ Next Button Selector (optional)</label>
-                            <input type="text" name="next_button_selector" placeholder="a.next-chapter">
-                        </div>
-                        <div class="form-group">
-                            <label>⚡ Max Workers</label>
-                            <input type="number" name="max_workers" value="5" min="1" max="15">
-                        </div>
-                        <div class="form-group">
-                            <label>⏱ Min Delay (sec)</label>
-                            <input type="number" name="delay_min" value="0.5" min="0" step="0.1">
-                        </div>
-                        <div class="form-group">
-                            <label>⏱ Max Delay (sec)</label>
-                            <input type="number" name="delay_max" value="2.0" min="0.1" step="0.1">
-                        </div>
-                        <div class="form-group">
-                            <label>📁 Output Format</label>
-                            <select name="output_format">
-                                <option value="single_txt">Single TXT File</option>
-                                <option value="separate_files">Separate Chapter Files</option>
-                                <option value="json">JSON Export</option>
-                                <option value="markdown">Markdown</option>
-                                <option value="zip">ZIP Archive</option>
-                                <option value="epub">EPUB Book</option>
-                                <option value="all">All Formats</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label>🌐 Use Browser Mode</label>
-                            <select name="use_browser">
-                                <option value="false">No (Fast HTTP)</option>
-                                <option value="true">Yes (Playwright)</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label>🧹 Remove Watermarks</label>
-                            <select name="remove_watermark">
-                                <option value="true">Yes</option>
-                                <option value="false">No</option>
-                            </select>
-                        </div>
-                    </div>
+    <script type="text/babel">
+    // ================================================================
+    // NEONWATCH REACT APPLICATION
+    // ================================================================
 
-                    <!-- Login Section -->
-                    <details style="margin-top: 20px;">
-                        <summary style="cursor:pointer;color:var(--accent-pink);font-weight:700;">🔐 Login Settings (Advanced)</summary>
-                        <div class="form-grid" style="margin-top: 12px;">
-                            <div class="form-group">
-                                <label>Login URL</label>
-                                <input type="text" name="login_url" placeholder="https://example.com/login">
-                            </div>
-                            <div class="form-group">
-                                <label>Username / Email</label>
-                                <input type="text" name="login_user" placeholder="username">
-                            </div>
-                            <div class="form-group">
-                                <label>Password</label>
-                                <input type="password" name="login_pass" placeholder="password">
-                            </div>
-                            <div class="form-group" style="grid-column: 1/-1;">
-                                <label>Cookies JSON (paste exported cookies)</label>
-                                <textarea name="cookies_json" rows="3" placeholder='[{"name":"session","value":"abc123","domain":".example.com"}]'></textarea>
-                            </div>
-                        </div>
-                    </details>
+    const { useState, useEffect, useCallback, useRef, useMemo, createContext, useContext } = React;
 
-                    <div class="btn-group">
-                        <button type="submit" class="btn btn-primary">🚀 Start Scraping</button>
-                        <button type="reset" class="btn btn-warning">🔄 Reset</button>
-                    </div>
-                </form>
-            </div>
-        </div>
+    // ======== API Configuration ========
+    const API_BASE = window.location.origin + '/api';
 
-        <!-- Jobs Tab -->
-        <div class="tab-content" id="tab-jobs">
-            <div class="card">
-                <h2>📋 Job History</h2>
-                <div style="overflow-x: auto;">
-                    <table class="job-table" id="jobsTable">
-                        <thead>
-                            <tr>
-                                <th>Job ID</th>
-                                <th>Novel</th>
-                                <th>Status</th>
-                                <th>Progress</th>
-                                <th>Created</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody id="jobsBody"></tbody>
-                    </table>
+    const api = {
+        async request(method, path, body = null, token = null) {
+            const headers = { 'Content-Type': 'application/json' };
+            if (token) headers['Authorization'] = `Bearer ${token}`;
+            const opts = { method, headers };
+            if (body) opts.body = JSON.stringify(body);
+            const res = await fetch(API_BASE + path, opts);
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || 'Request failed');
+            return data;
+        },
+        get(path, token) { return this.request('GET', path, null, token); },
+        post(path, body, token) { return this.request('POST', path, body, token); },
+        put(path, body, token) { return this.request('PUT', path, body, token); },
+        delete(path, token) { return this.request('DELETE', path, null, token); },
+    };
+
+    // ======== Context ========
+    const AppContext = createContext();
+
+    const useApp = () => useContext(AppContext);
+
+    // ======== Toast Component ========
+    function Toast({ message, type, onClose }) {
+        useEffect(() => {
+            const timer = setTimeout(onClose, 4000);
+            return () => clearTimeout(timer);
+        }, []);
+        return (
+            <div className={`toast toast-${type}`}>
+                <div className="flex items-center gap-3">
+                    <span>{type === 'success' ? '✅' : '❌'}</span>
+                    <span className="font-medium">{message}</span>
                 </div>
             </div>
-        </div>
+        );
+    }
 
-        <!-- Monitor Tab -->
-        <div class="tab-content" id="tab-monitor">
-            <div class="card" id="monitorCard">
-                <h2>📊 Job Monitor</h2>
-                <select id="monitorJobSelect" onchange="selectMonitorJob(this.value)" style="background:var(--bg-input);border:1px solid var(--border-color);color:var(--text-white);padding:8px 14px;border-radius:8px;margin-bottom:16px;min-width:300px;">
-                    <option value="">Select a job...</option>
-                </select>
-                <div id="monitorContent" class="hidden">
-                    <div class="stats-grid">
-                        <div class="stat-card"><div class="label">Completed</div><div class="value" id="mCompleted">0</div></div>
-                        <div class="stat-card"><div class="label">Failed</div><div class="value" id="mFailed">0</div></div>
-                        <div class="stat-card"><div class="label">Pending</div><div class="value" id="mPending">0</div></div>
-                        <div class="stat-card"><div class="label">Speed (ch/min)</div><div class="value" id="mSpeed">0</div></div>
-                        <div class="stat-card"><div class="label">Avg Response</div><div class="value" id="mAvgResp">0s</div></div>
-                        <div class="stat-card"><div class="label">ETA</div><div class="value" id="mEta">--</div></div>
-                        <div class="stat-card"><div class="label">Active Threads</div><div class="value" id="mThreads">0</div></div>
-                        <div class="stat-card"><div class="label">Current Delay</div><div class="value" id="mDelay">0s</div></div>
-                    </div>
-                    <div class="progress-container">
-                        <div class="progress-bar" id="mProgressBar" style="width:0%">0%</div>
-                    </div>
-                    <h3 style="margin: 16px 0 8px; color: var(--accent-pink);">📦 Chapter Map</h3>
-                    <div class="chapters-grid" id="chapterMap"></div>
-                    <h3 style="margin: 16px 0 8px; color: var(--accent-pink);">⚠️ Errors</h3>
-                    <div class="log-box" id="errorLog" style="max-height:200px;"></div>
-                </div>
+    // ======== Particles ========
+    function Particles() {
+        return (
+            <div className="fixed inset-0 pointer-events-none z-0 overflow-hidden">
+                {[...Array(15)].map((_, i) => (
+                    <div key={i} className="particle" style={{
+                        width: `${Math.random() * 6 + 2}px`,
+                        height: `${Math.random() * 6 + 2}px`,
+                        left: `${Math.random() * 100}%`,
+                        animationDelay: `${Math.random() * 20}s`,
+                        animationDuration: `${Math.random() * 15 + 15}s`,
+                    }} />
+                ))}
             </div>
-        </div>
+        );
+    }
 
-        <!-- Logs Tab -->
-        <div class="tab-content" id="tab-logs">
-            <div class="card">
-                <h2>📝 System Logs</h2>
-                <div class="btn-group" style="margin-bottom: 12px;">
-                    <button class="btn btn-sm btn-info" onclick="refreshLogs()">🔄 Refresh</button>
-                    <button class="btn btn-sm btn-danger" onclick="clearLogs()">🗑 Clear</button>
-                </div>
-                <div class="log-box" id="systemLogs"></div>
+    // ======== Spinner ========
+    function Spinner({ size = 'md' }) {
+        const sizes = { sm: 'w-5 h-5', md: 'w-10 h-10', lg: 'w-16 h-16' };
+        return <div className={`spinner ${sizes[size]}`} />;
+    }
+
+    // ======== Logo Component ========
+    function Logo({ config, size = 'md' }) {
+        const sizes = { sm: 'text-xl', md: 'text-3xl', lg: 'text-5xl' };
+        if (config?.logo_url) {
+            return <img src={config.logo_url} alt="Logo" className={`h-10 animate-glow-pulse logo-glow`} />;
+        }
+        return (
+            <div className={`font-black ${sizes[size]} logo-glow flex items-center gap-2`}>
+                <span className="text-neon-pink">⚡</span>
+                <span className="bg-gradient-to-r from-neon-pink via-neon-purple to-electric-violet bg-clip-text text-transparent">
+                    {config?.site_name || 'NeonWatch'}
+                </span>
             </div>
-        </div>
+        );
+    }
 
-        <!-- Downloads Tab -->
-        <div class="tab-content" id="tab-downloads">
-            <div class="card">
-                <h2>📥 Download Manager</h2>
-                <select id="dlJobSelect" onchange="loadDownloads(this.value)" style="background:var(--bg-input);border:1px solid var(--border-color);color:var(--text-white);padding:8px 14px;border-radius:8px;margin-bottom:16px;min-width:300px;">
-                    <option value="">Select a job...</option>
-                </select>
-                <div id="downloadsList"></div>
-            </div>
-        </div>
-    </div>
+    // ======== Status Dot ========
+    function StatusDot({ status }) {
+        const cls = {
+            up: 'status-up', down: 'status-down',
+            pending: 'status-pending', paused: 'status-paused', unknown: 'status-pending'
+        };
+        return <span className={`status-dot ${cls[status] || 'status-pending'}`} />;
+    }
 
-    <script>
-        let currentTheme = 'dark';
-        let monitorInterval = null;
-        let statsInterval = null;
-        let currentMonitorJob = '';
+    // ======== Music Toggle ========
+    function MusicToggle({ musicUrl }) {
+        const [playing, setPlaying] = useState(false);
+        const audioRef = useRef(null);
 
-        function toggleTheme() {
-            currentTheme = currentTheme === 'dark' ? 'light' : 'dark';
-            document.documentElement.setAttribute('data-theme', currentTheme);
-        }
-
-        function switchTab(name) {
-            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-            event.target.classList.add('active');
-            document.getElementById('tab-' + name).classList.add('active');
-            if (name === 'jobs') refreshJobs();
-            if (name === 'logs') refreshLogs();
-            if (name === 'monitor') refreshMonitorSelect();
-            if (name === 'downloads') refreshDownloadSelect();
-        }
-
-        function toggleMode(mode) {
-            document.querySelectorAll('.pattern-field').forEach(e => e.classList.toggle('hidden', mode === 'smart'));
-            document.querySelectorAll('.smart-field').forEach(e => e.classList.toggle('hidden', mode === 'pattern'));
-        }
-
-        async function createJob(e) {
-            e.preventDefault();
-            const form = new FormData(e.target);
-            const data = Object.fromEntries(form.entries());
-            data.start_chapter = parseInt(data.start_chapter) || 1;
-            data.end_chapter = parseInt(data.end_chapter) || 100;
-            data.max_workers = parseInt(data.max_workers) || 5;
-            data.delay_min = parseFloat(data.delay_min) || 0.5;
-            data.delay_max = parseFloat(data.delay_max) || 2.0;
-            data.use_browser = data.use_browser === 'true';
-            data.remove_watermark = data.remove_watermark === 'true';
-            try {
-                const resp = await fetch('/api/jobs', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify(data)
-                });
-                const result = await resp.json();
-                if (result.success) {
-                    alert('✅ Job created and started: ' + result.job_id);
-                    switchTab('monitor');
-                    currentMonitorJob = result.job_id;
-                    startMonitor(result.job_id);
-                } else {
-                    alert('❌ Error: ' + result.error);
-                }
-            } catch(err) {
-                alert('❌ Request failed: ' + err.message);
+        useEffect(() => {
+            audioRef.current = document.getElementById('bg-audio');
+            if (musicUrl && audioRef.current) {
+                audioRef.current.src = musicUrl;
             }
-        }
+        }, [musicUrl]);
 
-        async function refreshJobs() {
+        const toggle = () => {
+            if (!audioRef.current || !musicUrl) return;
+            if (playing) {
+                audioRef.current.pause();
+            } else {
+                audioRef.current.play().catch(() => {});
+            }
+            setPlaying(!playing);
+        };
+
+        if (!musicUrl) return null;
+        return (
+            <button onClick={toggle} className={`music-toggle ${playing ? 'playing' : ''}`}
+                    title={playing ? 'Pause Music' : 'Play Music'}>
+                <span className="text-neon-pink text-xl">{playing ? '🔊' : '🔇'}</span>
+            </button>
+        );
+    }
+
+    // ======== Login Page ========
+    function LoginPage({ onLogin, switchToRegister }) {
+        const [login, setLogin] = useState('');
+        const [password, setPassword] = useState('');
+        const [error, setError] = useState('');
+        const [loading, setLoading] = useState(false);
+
+        const handleSubmit = async (e) => {
+            e.preventDefault();
+            setLoading(true); setError('');
             try {
-                const resp = await fetch('/api/jobs');
-                const data = await resp.json();
-                const tbody = document.getElementById('jobsBody');
-                tbody.innerHTML = '';
-                data.jobs.forEach(j => {
-                    const tr = document.createElement('tr');
-                    tr.innerHTML = `
-                        <td style="font-family:monospace;font-size:11px;">${j.job_id}</td>
-                        <td><strong>${j.novel_name || '-'}</strong></td>
-                        <td><span class="status-badge status-${j.status}">${j.status}</span></td>
-                        <td>${j.progress}</td>
-                        <td style="font-size:11px;">${j.created_at || '-'}</td>
-                        <td>
-                            <button class="btn btn-sm btn-info" onclick="viewJob('${j.job_id}')">👁</button>
-                            ${j.status === 'running' ? `<button class="btn btn-sm btn-warning" onclick="pauseJob('${j.job_id}')">⏸</button>` : ''}
-                            ${j.status === 'paused' ? `<button class="btn btn-sm btn-success" onclick="resumeJob('${j.job_id}')">▶</button>` : ''}
-                            ${['running','paused'].includes(j.status) ? `<button class="btn btn-sm btn-danger" onclick="cancelJob('${j.job_id}')">⏹</button>` : ''}
-                            ${['completed','failed','cancelled'].includes(j.status) ? `<button class="btn btn-sm btn-danger" onclick="deleteJob('${j.job_id}')">🗑</button>` : ''}
-                        </td>
-                    `;
-                    tbody.appendChild(tr);
-                });
-            } catch(err) { console.error(err); }
-        }
+                const data = await api.post('/auth/login', { login, password });
+                onLogin(data.token, data.user);
+            } catch (err) { setError(err.message); }
+            setLoading(false);
+        };
 
-        function viewJob(jobId) {
-            currentMonitorJob = jobId;
-            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-            document.querySelectorAll('.tab')[2].classList.add('active');
-            document.getElementById('tab-monitor').classList.add('active');
-            startMonitor(jobId);
-        }
-
-        async function pauseJob(id) {
-            await fetch(`/api/jobs/${id}/pause`, {method:'POST'});
-            refreshJobs();
-        }
-        async function resumeJob(id) {
-            await fetch(`/api/jobs/${id}/resume`, {method:'POST'});
-            refreshJobs();
-        }
-        async function cancelJob(id) {
-            if (!confirm('Cancel this job?')) return;
-            await fetch(`/api/jobs/${id}/cancel`, {method:'POST'});
-            refreshJobs();
-        }
-        async function deleteJob(id) {
-            if (!confirm('Delete this job and all its files?')) return;
-            await fetch(`/api/jobs/${id}`, {method:'DELETE'});
-            refreshJobs();
-        }
-
-        function refreshMonitorSelect() {
-            fetch('/api/jobs').then(r=>r.json()).then(data => {
-                const sel = document.getElementById('monitorJobSelect');
-                sel.innerHTML = '<option value="">Select a job...</option>';
-                data.jobs.forEach(j => {
-                    sel.innerHTML += `<option value="${j.job_id}" ${j.job_id===currentMonitorJob?'selected':''}>${j.novel_name} (${j.status}) - ${j.job_id}</option>`;
-                });
-                if (currentMonitorJob) startMonitor(currentMonitorJob);
-            });
-        }
-
-        function selectMonitorJob(jobId) {
-            currentMonitorJob = jobId;
-            if (jobId) startMonitor(jobId);
-        }
-
-        function startMonitor(jobId) {
-            document.getElementById('monitorContent').classList.remove('hidden');
-            document.getElementById('monitorJobSelect').value = jobId;
-            if (monitorInterval) clearInterval(monitorInterval);
-            updateMonitor(jobId);
-            monitorInterval = setInterval(() => updateMonitor(jobId), 2000);
-        }
-
-        async function updateMonitor(jobId) {
-            try {
-                const resp = await fetch(`/api/jobs/${jobId}`);
-                const data = await resp.json();
-                if (!data.job) return;
-                const j = data.job;
-                const s = j.chapters_summary || {};
-
-                document.getElementById('mCompleted').textContent = j.completed_count || 0;
-                document.getElementById('mFailed').textContent = j.failed_count || 0;
-                document.getElementById('mPending').textContent = s.pending || 0;
-                document.getElementById('mSpeed').textContent = (j.current_speed || 0).toFixed(1);
-                document.getElementById('mAvgResp').textContent = (j.avg_response_time || 0).toFixed(2) + 's';
-                document.getElementById('mEta').textContent = j.estimated_eta || '--';
-                document.getElementById('mThreads').textContent = j.active_threads || 0;
-                document.getElementById('mDelay').textContent = (j.current_delay || 0).toFixed(2) + 's';
-
-                const total = j.total_chapters || 1;
-                const pct = Math.round(((j.completed_count || 0) / total) * 100);
-                const bar = document.getElementById('mProgressBar');
-                bar.style.width = pct + '%';
-                bar.textContent = pct + '% (' + (j.completed_count||0) + '/' + total + ')';
-
-                // Error log
-                const errDiv = document.getElementById('errorLog');
-                if (j.error_log && j.error_log.length) {
-                    errDiv.innerHTML = j.error_log.map(e => `<div class="log-error">${escapeHtml(e)}</div>`).join('');
-                } else {
-                    errDiv.innerHTML = '<div style="color:#666;">No errors</div>';
-                }
-
-                // Chapter map
-                const chResp = await fetch(`/api/jobs/${jobId}/chapters`);
-                const chData = await chResp.json();
-                const mapDiv = document.getElementById('chapterMap');
-                if (chData.chapters && chData.chapters.length) {
-                    mapDiv.innerHTML = chData.chapters.map(ch => {
-                        let cls = 'ch-pending';
-                        if (ch.status === 'success') cls = 'ch-success';
-                        else if (ch.status === 'failed') cls = 'ch-failed';
-                        else if (ch.status === 'fetching') cls = 'ch-fetching';
-                        return `<div class="ch-cell ${cls}" title="Ch ${ch.chapter_number}: ${ch.status} (${ch.mode_used || '-'})">${ch.chapter_number}</div>`;
-                    }).join('');
-                }
-
-                if (['completed','failed','cancelled'].includes(j.status) && monitorInterval) {
-                    clearInterval(monitorInterval);
-                }
-            } catch(err) { console.error(err); }
-        }
-
-        async function refreshLogs() {
-            try {
-                const resp = await fetch('/api/logs');
-                const data = await resp.json();
-                const div = document.getElementById('systemLogs');
-                div.innerHTML = data.logs.map(l => {
-                    let cls = '';
-                    if (l.includes('[ERROR]')) cls = 'log-error';
-                    else if (l.includes('[WARNING]')) cls = 'log-warning';
-                    else if (l.includes('[INFO]')) cls = 'log-info';
-                    return `<div class="${cls}">${escapeHtml(l)}</div>`;
-                }).join('');
-                div.scrollTop = div.scrollHeight;
-            } catch(err) { console.error(err); }
-        }
-
-        async function clearLogs() {
-            await fetch('/api/logs', {method: 'DELETE'});
-            refreshLogs();
-        }
-
-        function refreshDownloadSelect() {
-            fetch('/api/jobs').then(r=>r.json()).then(data => {
-                const sel = document.getElementById('dlJobSelect');
-                sel.innerHTML = '<option value="">Select a job...</option>';
-                data.jobs.filter(j => j.output_files > 0).forEach(j => {
-                    sel.innerHTML += `<option value="${j.job_id}">${j.novel_name} - ${j.job_id}</option>`;
-                });
-            });
-        }
-
-        async function loadDownloads(jobId) {
-            if (!jobId) return;
-            try {
-                const resp = await fetch(`/api/jobs/${jobId}/files`);
-                const data = await resp.json();
-                const div = document.getElementById('downloadsList');
-                if (data.files && data.files.length) {
-                    div.innerHTML = data.files.map(f => `
-                        <div style="display:flex;justify-content:space-between;align-items:center;padding:10px;border-bottom:1px solid rgba(233,69,96,0.1);">
-                            <div>
-                                <strong>${escapeHtml(f.name)}</strong>
-                                <span style="color:var(--text-secondary);font-size:12px;margin-left:8px;">${f.size_human}</span>
+        return (
+            <div className="min-h-screen flex items-center justify-center p-4">
+                <div className="glass-card p-8 w-full max-w-md animate-slide-up">
+                    <div className="text-center mb-8">
+                        <Logo size="lg" />
+                        <p className="text-white/50 mt-2">Sign in to your monitoring dashboard</p>
+                    </div>
+                    <form onSubmit={handleSubmit} className="space-y-5">
+                        {error && (
+                            <div className="bg-red-500/10 border border-red-500/30 text-red-400 p-3 rounded-xl text-sm">
+                                {error}
                             </div>
-                            <a href="/api/download?path=${encodeURIComponent(f.path)}" class="btn btn-sm btn-primary">📥 Download</a>
+                        )}
+                        <div>
+                            <label className="text-sm text-white/60 mb-1 block">Username or Email</label>
+                            <input type="text" value={login} onChange={e => setLogin(e.target.value)}
+                                   className="neon-input" placeholder="Enter username or email" required />
                         </div>
-                    `).join('');
-                } else {
-                    div.innerHTML = '<p style="color:#666;">No files available</p>';
-                }
-            } catch(err) { console.error(err); }
-        }
+                        <div>
+                            <label className="text-sm text-white/60 mb-1 block">Password</label>
+                            <input type="password" value={password} onChange={e => setPassword(e.target.value)}
+                                   className="neon-input" placeholder="Enter password" required />
+                        </div>
+                        <button type="submit" className="neon-btn w-full py-3 text-lg" disabled={loading}>
+                            {loading ? <Spinner size="sm" /> : '⚡ Sign In'}
+                        </button>
+                    </form>
+                    <p className="text-center text-white/40 mt-6 text-sm">
+                        Don't have an account?{' '}
+                        <span onClick={switchToRegister} className="text-neon-pink cursor-pointer hover:underline">
+                            Register
+                        </span>
+                    </p>
+                </div>
+            </div>
+        );
+    }
 
-        async function updateSystemStats() {
+    // ======== Register Page ========
+    function RegisterPage({ onLogin, switchToLogin }) {
+        const [form, setForm] = useState({ username: '', email: '', password: '', full_name: '' });
+        const [error, setError] = useState('');
+        const [loading, setLoading] = useState(false);
+
+        const handleSubmit = async (e) => {
+            e.preventDefault();
+            setLoading(true); setError('');
             try {
-                const resp = await fetch('/api/system');
-                const data = await resp.json();
-                document.getElementById('cpuUsage').textContent = data.cpu_percent.toFixed(1) + '%';
-                document.getElementById('ramUsage').textContent = data.ram_percent.toFixed(1) + '%';
-                document.getElementById('diskFree').textContent = data.disk_free_gb + 'GB';
-                document.getElementById('activeJobs').textContent = data.active_jobs || 0;
-                document.getElementById('totalJobs').textContent = data.total_jobs || 0;
-            } catch(err) {}
+                const data = await api.post('/auth/register', form);
+                onLogin(data.token, data.user);
+            } catch (err) { setError(err.message); }
+            setLoading(false);
+        };
+
+        return (
+            <div className="min-h-screen flex items-center justify-center p-4">
+                <div className="glass-card p-8 w-full max-w-md animate-slide-up">
+                    <div className="text-center mb-8">
+                        <Logo size="lg" />
+                        <p className="text-white/50 mt-2">Create your monitoring account</p>
+                    </div>
+                    <form onSubmit={handleSubmit} className="space-y-4">
+                        {error && (
+                            <div className="bg-red-500/10 border border-red-500/30 text-red-400 p-3 rounded-xl text-sm">{error}</div>
+                        )}
+                        <input type="text" value={form.full_name} onChange={e => setForm({...form, full_name: e.target.value})}
+                               className="neon-input" placeholder="Full Name" />
+                        <input type="text" value={form.username} onChange={e => setForm({...form, username: e.target.value})}
+                               className="neon-input" placeholder="Username" required />
+                        <input type="email" value={form.email} onChange={e => setForm({...form, email: e.target.value})}
+                               className="neon-input" placeholder="Email" required />
+                        <input type="password" value={form.password} onChange={e => setForm({...form, password: e.target.value})}
+                               className="neon-input" placeholder="Password (min 8 chars)" required />
+                        <button type="submit" className="neon-btn w-full py-3 text-lg" disabled={loading}>
+                            {loading ? <Spinner size="sm" /> : '🚀 Create Account'}
+                        </button>
+                    </form>
+                    <p className="text-center text-white/40 mt-6 text-sm">
+                        Already have an account?{' '}
+                        <span onClick={switchToLogin} className="text-neon-pink cursor-pointer hover:underline">Sign In</span>
+                    </p>
+                </div>
+            </div>
+        );
+    }
+
+    // ======== Stat Card ========
+    function StatCard({ icon, label, value, color = 'neon-pink', subtext }) {
+        return (
+            <div className="glass-card p-5 animate-slide-up">
+                <div className="flex items-center justify-between mb-2">
+                    <span className="text-2xl">{icon}</span>
+                    <span className={`text-xs px-2 py-1 rounded-full bg-${color}/10 text-${color}`}>{subtext}</span>
+                </div>
+                <p className="text-3xl font-bold bg-gradient-to-r from-neon-pink to-neon-purple bg-clip-text text-transparent">{value}</p>
+                <p className="text-sm text-white/50 mt-1">{label}</p>
+            </div>
+        );
+    }
+
+    // ======== Monitor Card ========
+    function MonitorCard({ monitor, onClick }) {
+        const statusClass = `status-card-${monitor.status}`;
+        return (
+            <div onClick={() => onClick(monitor)} className={`glass-card monitor-card ${statusClass} p-5 cursor-pointer hover:scale-[1.02] transition-all duration-300 animate-fade-in`}>
+                <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-3">
+                        <StatusDot status={monitor.status} />
+                        <h3 className="font-semibold text-white truncate max-w-[200px]">{monitor.name}</h3>
+                    </div>
+                    <span className="text-xs px-2 py-1 rounded-full bg-neon-purple/20 text-neon-purple uppercase font-mono">{monitor.monitor_type}</span>
+                </div>
+                <p className="text-xs text-white/40 truncate mb-3 font-mono">{monitor.url}</p>
+                <div className="grid grid-cols-3 gap-2 text-center">
+                    <div>
+                        <p className="text-lg font-bold text-neon-green">{monitor.uptime_percentage?.toFixed(2) || '0.00'}%</p>
+                        <p className="text-xs text-white/40">Uptime</p>
+                    </div>
+                    <div>
+                        <p className="text-lg font-bold text-neon-purple">{monitor.last_response_time?.toFixed(0) || '-'}ms</p>
+                        <p className="text-xs text-white/40">Response</p>
+                    </div>
+                    <div>
+                        <p className="text-lg font-bold text-white/80">{monitor.total_checks || 0}</p>
+                        <p className="text-xs text-white/40">Checks</p>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    // ======== Create Monitor Modal ========
+    function CreateMonitorModal({ onClose, onCreated, token }) {
+        const [form, setForm] = useState({
+            name: '', url: '', monitor_type: 'http', check_interval: 300,
+            timeout: 30, expected_status_code: 200, keyword: '', port: '',
+            alert_on_down: true, alert_on_recovery: true, alert_threshold: 1,
+        });
+        const [loading, setLoading] = useState(false);
+        const [error, setError] = useState('');
+
+        const handleSubmit = async (e) => {
+            e.preventDefault(); setLoading(true); setError('');
+            try {
+                const payload = { ...form };
+                if (payload.port) payload.port = parseInt(payload.port);
+                else delete payload.port;
+                if (!payload.keyword) delete payload.keyword;
+                const data = await api.post('/monitors', payload, token);
+                onCreated(data.monitor);
+                onClose();
+            } catch (err) { setError(err.message); }
+            setLoading(false);
+        };
+
+        return (
+            <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
+                <div className="glass-card p-6 w-full max-w-lg max-h-[85vh] overflow-y-auto animate-slide-up" onClick={e => e.stopPropagation()}>
+                    <div className="flex justify-between items-center mb-6">
+                        <h2 className="text-2xl font-bold text-neon-pink">➕ New Monitor</h2>
+                        <button onClick={onClose} className="text-white/50 hover:text-white text-2xl">&times;</button>
+                    </div>
+                    <form onSubmit={handleSubmit} className="space-y-4">
+                        {error && <div className="bg-red-500/10 border border-red-500/30 text-red-400 p-3 rounded-xl text-sm">{error}</div>}
+                        <div>
+                            <label className="text-sm text-white/60 mb-1 block">Monitor Name</label>
+                            <input className="neon-input" value={form.name} onChange={e => setForm({...form, name: e.target.value})} placeholder="My Website" required />
+                        </div>
+                        <div>
+                            <label className="text-sm text-white/60 mb-1 block">URL / Host</label>
+                            <input className="neon-input" value={form.url} onChange={e => setForm({...form, url: e.target.value})} placeholder="https://example.com" required />
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <label className="text-sm text-white/60 mb-1 block">Type</label>
+                                <select className="neon-select" value={form.monitor_type} onChange={e => setForm({...form, monitor_type: e.target.value})}>
+                                    <option value="http">HTTP(S)</option>
+                                    <option value="ping">Ping</option>
+                                    <option value="port">Port</option>
+                                    <option value="keyword">Keyword</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label className="text-sm text-white/60 mb-1 block">Interval (sec)</label>
+                                <select className="neon-select" value={form.check_interval} onChange={e => setForm({...form, check_interval: parseInt(e.target.value)})}>
+                                    <option value="60">1 min</option>
+                                    <option value="180">3 min</option>
+                                    <option value="300">5 min</option>
+                                    <option value="600">10 min</option>
+                                    <option value="1800">30 min</option>
+                                    <option value="3600">1 hour</option>
+                                </select>
+                            </div>
+                        </div>
+                        {form.monitor_type === 'keyword' && (
+                            <div>
+                                <label className="text-sm text-white/60 mb-1 block">Keyword to search</label>
+                                <input className="neon-input" value={form.keyword} onChange={e => setForm({...form, keyword: e.target.value})} placeholder="Expected keyword" />
+                            </div>
+                        )}
+                        {form.monitor_type === 'port' && (
+                            <div>
+                                <label className="text-sm text-white/60 mb-1 block">Port Number</label>
+                                <input type="number" className="neon-input" value={form.port} onChange={e => setForm({...form, port: e.target.value})} placeholder="443" />
+                            </div>
+                        )}
+                        <div>
+                            <label className="text-sm text-white/60 mb-1 block">Timeout (seconds)</label>
+                            <input type="number" className="neon-input" value={form.timeout} onChange={e => setForm({...form, timeout: parseInt(e.target.value)})} />
+                        </div>
+                        <button type="submit" className="neon-btn w-full py-3" disabled={loading}>
+                            {loading ? 'Creating...' : '🚀 Create Monitor'}
+                        </button>
+                    </form>
+                </div>
+            </div>
+        );
+    }
+
+    // ======== Monitor Detail View ========
+    function MonitorDetail({ monitorId, token, onBack }) {
+        const [data, setData] = useState(null);
+        const [loading, setLoading] = useState(true);
+
+        useEffect(() => {
+            loadDetail();
+        }, [monitorId]);
+
+        const loadDetail = async () => {
+            setLoading(true);
+            try {
+                const d = await api.get(`/monitors/${monitorId}`, token);
+                setData(d);
+            } catch (err) { console.error(err); }
+            setLoading(false);
+        };
+
+        const triggerCheck = async () => {
+            try {
+                await api.post(`/monitors/${monitorId}/check`, {}, token);
+                setTimeout(loadDetail, 3000);
+            } catch (err) { console.error(err); }
+        };
+
+        if (loading) return <div className="flex justify-center py-20"><Spinner /></div>;
+        if (!data) return <div className="text-center py-20 text-white/50">Monitor not found</div>;
+
+        const m = data.monitor;
+        const logs = data.logs || [];
+
+        return (
+            <div className="space-y-6 animate-fade-in">
+                <div className="flex items-center gap-4 mb-6">
+                    <button onClick={onBack} className="neon-btn-outline px-4 py-2">← Back</button>
+                    <StatusDot status={m.status} />
+                    <h1 className="text-2xl font-bold">{m.name}</h1>
+                    <span className="text-xs px-3 py-1 rounded-full bg-neon-purple/20 text-neon-purple uppercase">{m.monitor_type}</span>
+                    <button onClick={triggerCheck} className="neon-btn ml-auto">⚡ Check Now</button>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <StatCard icon="📊" label="Uptime" value={`${m.uptime_percentage?.toFixed(2) || 0}%`} subtext="overall" />
+                    <StatCard icon="⚡" label="Response Time" value={`${m.last_response_time?.toFixed(0) || '-'}ms`} subtext="last" />
+                    <StatCard icon="✅" label="Total Checks" value={m.total_checks || 0} subtext="all time" />
+                    <StatCard icon="🔴" label="Downtime Events" value={m.total_down || 0} subtext="failures" />
+                </div>
+
+                <div className="glass-card p-5">
+                    <h3 className="text-lg font-semibold text-neon-pink mb-2">Monitor URL</h3>
+                    <p className="font-mono text-sm text-white/60 break-all">{m.url}</p>
+                </div>
+
+                {data.daily_stats && data.daily_stats.length > 0 && (
+                    <div className="glass-card p-5">
+                        <h3 className="text-lg font-semibold text-neon-pink mb-4">30-Day Uptime</h3>
+                        <div className="uptime-bar">
+                            {data.daily_stats.map((d, i) => {
+                                const uptime = d.uptime_percentage || 100;
+                                const color = uptime >= 99.5 ? '#00FF88' : uptime >= 95 ? '#FFE500' : '#FF1744';
+                                return (
+                                    <div key={i} className="uptime-bar-segment" title={`${d.date}: ${uptime.toFixed(2)}%`}
+                                         style={{ height: `${Math.max(uptime * 0.3, 5)}px`, background: color }} />
+                                );
+                            })}
+                        </div>
+                    </div>
+                )}
+
+                <div className="glass-card p-5">
+                    <h3 className="text-lg font-semibold text-neon-pink mb-4">Recent Logs</h3>
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                            <thead>
+                                <tr className="text-white/50 border-b border-white/10">
+                                    <th className="py-2 text-left">Status</th>
+                                    <th className="py-2 text-left">Response</th>
+                                    <th className="py-2 text-left">Code</th>
+                                    <th className="py-2 text-left">Error</th>
+                                    <th className="py-2 text-left">Time</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {logs.slice(0, 30).map(log => (
+                                    <tr key={log.id} className="border-b border-white/5 hover:bg-white/5">
+                                        <td className="py-2"><StatusDot status={log.status} /></td>
+                                        <td className="py-2 text-neon-purple">{log.response_time?.toFixed(0) || '-'}ms</td>
+                                        <td className="py-2">{log.status_code || '-'}</td>
+                                        <td className="py-2 text-red-400 truncate max-w-[200px]">{log.error_message || '-'}</td>
+                                        <td className="py-2 text-white/40 font-mono text-xs">{new Date(log.created_at).toLocaleString()}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    // ======== Dashboard Page ========
+    function DashboardPage({ token, user }) {
+        const [dashboard, setDashboard] = useState(null);
+        const [loading, setLoading] = useState(true);
+        const [showCreate, setShowCreate] = useState(false);
+        const [selectedMonitor, setSelectedMonitor] = useState(null);
+
+        const loadDashboard = async () => {
+            try {
+                const data = await api.get('/dashboard', token);
+                setDashboard(data);
+            } catch (err) { console.error(err); }
+            setLoading(false);
+        };
+
+        useEffect(() => { loadDashboard(); const i = setInterval(loadDashboard, 30000); return () => clearInterval(i); }, []);
+
+        if (selectedMonitor) {
+            return <MonitorDetail monitorId={selectedMonitor.id} token={token} onBack={() => { setSelectedMonitor(null); loadDashboard(); }} />;
         }
 
-        function updateClock() {
-            document.getElementById('clock').textContent = new Date().toLocaleTimeString();
+        if (loading) return <div className="flex justify-center py-20"><Spinner /></div>;
+
+        const ov = dashboard?.overview || {};
+
+        return (
+            <div className="space-y-6 animate-fade-in">
+                <div className="flex items-center justify-between">
+                    <div>
+                        <h1 className="text-3xl font-bold bg-gradient-to-r from-neon-pink to-neon-purple bg-clip-text text-transparent">
+                            Dashboard
+                        </h1>
+                        <p className="text-white/40 mt-1">Welcome back, {user.full_name || user.username}! 👋</p>
+                    </div>
+                    <button onClick={() => setShowCreate(true)} className="neon-btn flex items-center gap-2">
+                        <span>➕</span> Add Monitor
+                    </button>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <StatCard icon="📡" label="Total Monitors" value={ov.total_monitors || 0} subtext="active" />
+                    <StatCard icon="✅" label="Monitors UP" value={ov.up || 0} subtext={`${ov.down || 0} down`} />
+                    <StatCard icon="📊" label="Avg Uptime" value={`${ov.avg_uptime?.toFixed(2) || 100}%`} subtext="overall" />
+                    <StatCard icon="⚡" label="Avg Response" value={`${ov.avg_response_time?.toFixed(0) || 0}ms`} subtext="latest" />
+                </div>
+
+                {dashboard?.monitors?.length > 0 ? (
+                    <div>
+                        <h2 className="text-xl font-semibold mb-4 text-white/80">Your Monitors</h2>
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                            {dashboard.monitors.map(m => (
+                                <MonitorCard key={m.id} monitor={m} onClick={setSelectedMonitor} />
+                            ))}
+                        </div>
+                    </div>
+                ) : (
+                    <div className="glass-card p-12 text-center">
+                        <p className="text-5xl mb-4">📡</p>
+                        <h3 className="text-2xl font-bold text-white/80 mb-2">No monitors yet</h3>
+                        <p className="text-white/40 mb-6">Create your first monitor to start tracking uptime</p>
+                        <button onClick={() => setShowCreate(true)} className="neon-btn">Create First Monitor</button>
+                    </div>
+                )}
+
+                {showCreate && (
+                    <CreateMonitorModal
+                        token={token}
+                        onClose={() => setShowCreate(false)}
+                        onCreated={() => loadDashboard()}
+                    />
+                )}
+            </div>
+        );
+    }
+
+    // ======== Admin: Site Config Page ========
+    function AdminSiteConfigPage({ token }) {
+        const [config, setConfig] = useState(null);
+        const [loading, setLoading] = useState(true);
+        const [saving, setSaving] = useState(false);
+        const [toast, setToast] = useState(null);
+
+        useEffect(() => {
+            api.get('/site-config', token).then(d => { setConfig(d.config); setLoading(false); });
+        }, []);
+
+        const save = async () => {
+            setSaving(true);
+            try {
+                const data = await api.put('/site-config', config, token);
+                setConfig(data.config);
+                setToast({ message: 'Site config updated!', type: 'success' });
+                // Apply changes immediately
+                const vid = document.querySelector('#bg-video-container video');
+                if (vid && config.bg_video_url) { vid.src = config.bg_video_url; vid.load(); vid.play(); }
+                const aud = document.getElementById('bg-audio');
+                if (aud && config.bg_music_url) { aud.src = config.bg_music_url; }
+            } catch (err) { setToast({ message: err.message, type: 'error' }); }
+            setSaving(false);
+        };
+
+        if (loading) return <div className="flex justify-center py-20"><Spinner /></div>;
+
+        const Field = ({ label, field, type = 'text', placeholder }) => (
+            <div>
+                <label className="text-sm text-white/60 mb-1 block">{label}</label>
+                {type === 'textarea' ? (
+                    <textarea className="neon-input min-h-[80px]" value={config[field] || ''} onChange={e => setConfig({...config, [field]: e.target.value})} placeholder={placeholder} />
+                ) : type === 'checkbox' ? (
+                    <div className={`toggle-switch ${config[field] ? 'active' : ''}`} onClick={() => setConfig({...config, [field]: !config[field]})} />
+                ) : (
+                    <input type={type} className="neon-input" value={config[field] || ''} onChange={e => setConfig({...config, [field]: type === 'number' ? parseFloat(e.target.value) : e.target.value})} placeholder={placeholder} />
+                )}
+            </div>
+        );
+
+        return (
+            <div className="space-y-6 animate-fade-in">
+                {toast && <Toast {...toast} onClose={() => setToast(null)} />}
+                <div className="flex items-center justify-between">
+                    <h1 className="text-3xl font-bold text-neon-pink">⚙️ Site Configuration</h1>
+                    <button onClick={save} className="neon-btn" disabled={saving}>{saving ? 'Saving...' : '💾 Save All'}</button>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <div className="glass-card p-6 space-y-4">
+                        <h3 className="text-xl font-semibold text-neon-purple">🏷️ Branding</h3>
+                        <Field label="Site Name" field="site_name" placeholder="NeonWatch" />
+                        <Field label="Site Tagline" field="site_tagline" placeholder="God-Level Monitoring" />
+                        <Field label="Logo URL" field="logo_url" placeholder="https://..." />
+                        <Field label="Favicon URL" field="favicon_url" placeholder="https://..." />
+                        <Field label="Footer Text" field="footer_text" placeholder="© 2024..." />
+                    </div>
+
+                    <div className="glass-card p-6 space-y-4">
+                        <h3 className="text-xl font-semibold text-neon-purple">🎬 Media & Background</h3>
+                        <Field label="Background Video URL (mp4/webm)" field="bg_video_url" placeholder="https://...video.mp4" />
+                        <Field label="Background Music URL (mp3)" field="bg_music_url" placeholder="https://...music.mp3" />
+                        <Field label="OG Image URL" field="og_image_url" placeholder="https://...image.png" />
+                    </div>
+
+                    <div className="glass-card p-6 space-y-4">
+                        <h3 className="text-xl font-semibold text-neon-purple">🎨 Theme Colors</h3>
+                        <div className="grid grid-cols-2 gap-4">
+                            <Field label="Primary Color" field="primary_color_theme" placeholder="#F806CC" />
+                            <Field label="Secondary Color" field="secondary_color_theme" placeholder="#2E0249" />
+                            <Field label="Accent Color" field="accent_color" placeholder="#A855F7" />
+                            <Field label="Glow Color" field="glow_color" placeholder="#F806CC" />
+                        </div>
+                        <Field label="Glass Opacity" field="glassmorphism_opacity" type="number" placeholder="0.15" />
+                        <Field label="Glass Blur (px)" field="glassmorphism_blur" type="number" placeholder="20" />
+                    </div>
+
+                    <div className="glass-card p-6 space-y-4">
+                        <h3 className="text-xl font-semibold text-neon-purple">🔧 Features</h3>
+                        <div className="space-y-3">
+                            <div className="flex items-center justify-between"><span className="text-white/70">Enable Particles</span><Field field="enable_particles" type="checkbox" /></div>
+                            <div className="flex items-center justify-between"><span className="text-white/70">Enable Animations</span><Field field="enable_animations" type="checkbox" /></div>
+                            <div className="flex items-center justify-between"><span className="text-white/70">Maintenance Mode</span><Field field="maintenance_mode" type="checkbox" /></div>
+                            <div className="flex items-center justify-between"><span className="text-white/70">Signup Enabled</span><Field field="signup_enabled" type="checkbox" /></div>
+                        </div>
+                        <Field label="Max Free Monitors" field="max_free_monitors" type="number" placeholder="10" />
+                        <Field label="Max Pro Monitors" field="max_pro_monitors" type="number" placeholder="100" />
+                    </div>
+
+                    <div className="glass-card p-6 space-y-4 lg:col-span-2">
+                        <h3 className="text-xl font-semibold text-neon-purple">🔍 SEO & Analytics</h3>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <Field label="Meta Title" field="meta_title" placeholder="NeonWatch..." />
+                            <Field label="Google Analytics ID" field="google_analytics_id" placeholder="G-XXXXXXX" />
+                        </div>
+                        <Field label="Meta Description" field="meta_description" type="textarea" placeholder="Description..." />
+                        <Field label="Custom CSS" field="custom_css" type="textarea" placeholder=".my-class { ... }" />
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    // ======== Admin: Users Management ========
+    function AdminUsersPage({ token }) {
+        const [users, setUsers] = useState([]);
+        const [loading, setLoading] = useState(true);
+        const [search, setSearch] = useState('');
+        const [toast, setToast] = useState(null);
+
+        const loadUsers = async () => {
+            try {
+                const data = await api.get(`/admin/users?search=${search}&limit=100`, token);
+                setUsers(data.users);
+            } catch (err) { console.error(err); }
+            setLoading(false);
+        };
+
+        useEffect(() => { loadUsers(); }, [search]);
+
+        const banUser = async (userId) => {
+            try {
+                await api.post(`/admin/users/${userId}/ban`, 'Violated terms of service', token);
+                setToast({ message: 'User banned', type: 'success' });
+                loadUsers();
+            } catch (err) { setToast({ message: err.message, type: 'error' }); }
+        };
+
+        const unbanUser = async (userId) => {
+            try {
+                await api.post(`/admin/users/${userId}/unban`, {}, token);
+                setToast({ message: 'User unbanned', type: 'success' });
+                loadUsers();
+            } catch (err) { setToast({ message: err.message, type: 'error' }); }
+        };
+
+        return (
+            <div className="space-y-6 animate-fade-in">
+                {toast && <Toast {...toast} onClose={() => setToast(null)} />}
+                <h1 className="text-3xl font-bold text-neon-pink">👥 User Management</h1>
+                <input className="neon-input max-w-md" value={search} onChange={e => setSearch(e.target.value)} placeholder="🔍 Search users..." />
+
+                {loading ? <Spinner /> : (
+                    <div className="glass-card overflow-hidden">
+                        <table className="w-full text-sm">
+                            <thead>
+                                <tr className="bg-neon-pink/5 text-neon-pink">
+                                    <th className="p-3 text-left">User</th>
+                                    <th className="p-3 text-left">Email</th>
+                                    <th className="p-3 text-left">Role</th>
+                                    <th className="p-3 text-left">Plan</th>
+                                    <th className="p-3 text-left">Monitors</th>
+                                    <th className="p-3 text-left">Status</th>
+                                    <th className="p-3 text-left">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {users.map(u => (
+                                    <tr key={u.id} className="border-b border-white/5 hover:bg-white/5">
+                                        <td className="p-3 font-semibold">{u.username}</td>
+                                        <td className="p-3 text-white/60">{u.email}</td>
+                                        <td className="p-3"><span className="px-2 py-1 rounded-full text-xs bg-neon-purple/20 text-neon-purple">{u.role}</span></td>
+                                        <td className="p-3 text-white/60">{u.plan}</td>
+                                        <td className="p-3">{u.monitor_count}</td>
+                                        <td className="p-3">{u.is_banned ? <span className="text-neon-red">Banned</span> : <span className="text-neon-green">Active</span>}</td>
+                                        <td className="p-3">
+                                            {u.is_banned ? (
+                                                <button onClick={() => unbanUser(u.id)} className="text-neon-green hover:underline text-xs">Unban</button>
+                                            ) : (
+                                                <button onClick={() => banUser(u.id)} className="text-neon-red hover:underline text-xs">Ban</button>
+                                            )}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+            </div>
+        );
+    }
+
+    // ======== Admin: Stats Page ========
+    function AdminStatsPage({ token }) {
+        const [stats, setStats] = useState(null);
+        const [loading, setLoading] = useState(true);
+
+        useEffect(() => {
+            api.get('/admin/stats', token).then(d => { setStats(d.stats); setLoading(false); });
+        }, []);
+
+        if (loading) return <div className="flex justify-center py-20"><Spinner /></div>;
+
+        return (
+            <div className="space-y-6 animate-fade-in">
+                <h1 className="text-3xl font-bold text-neon-pink">📊 System Statistics</h1>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <StatCard icon="👥" label="Total Users" value={stats.total_users} subtext={`${stats.new_users_week} this week`} />
+                    <StatCard icon="📡" label="Total Monitors" value={stats.total_monitors} subtext={`${stats.active_monitors} active`} />
+                    <StatCard icon="✅" label="Total Checks" value={stats.total_checks?.toLocaleString()} subtext="all time" />
+                    <StatCard icon="🔴" label="Incidents" value={stats.total_incidents} subtext={`${stats.open_incidents} open`} />
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="glass-card p-6">
+                        <h3 className="text-lg font-semibold text-neon-purple mb-4">Monitor Types</h3>
+                        {Object.entries(stats.monitor_types || {}).map(([type, count]) => (
+                            <div key={type} className="flex justify-between py-2 border-b border-white/5">
+                                <span className="text-white/70 uppercase">{type}</span>
+                                <span className="text-neon-pink font-bold">{count}</span>
+                            </div>
+                        ))}
+                    </div>
+                    <div className="glass-card p-6">
+                        <h3 className="text-lg font-semibold text-neon-purple mb-4">Plan Distribution</h3>
+                        {Object.entries(stats.plan_distribution || {}).map(([plan, count]) => (
+                            <div key={plan} className="flex justify-between py-2 border-b border-white/5">
+                                <span className="text-white/70 uppercase">{plan}</span>
+                                <span className="text-neon-pink font-bold">{count}</span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    // ======== Settings Page ========
+    function SettingsPage({ token, user, onUpdate }) {
+        const [form, setForm] = useState({
+            full_name: user.full_name || '',
+            notification_email: user.notification_email || '',
+            webhook_url: user.webhook_url || '',
+            discord_webhook: user.discord_webhook || '',
+            slack_webhook: user.slack_webhook || '',
+            timezone: user.timezone || 'UTC',
+        });
+        const [toast, setToast] = useState(null);
+        const [saving, setSaving] = useState(false);
+
+        const save = async () => {
+            setSaving(true);
+            try {
+                const data = await api.put('/auth/me', form, token);
+                onUpdate(data.user);
+                setToast({ message: 'Settings saved!', type: 'success' });
+            } catch (err) { setToast({ message: err.message, type: 'error' }); }
+            setSaving(false);
+        };
+
+        return (
+            <div className="space-y-6 animate-fade-in max-w-2xl">
+                {toast && <Toast {...toast} onClose={() => setToast(null)} />}
+                <h1 className="text-3xl font-bold text-neon-pink">⚙️ Account Settings</h1>
+                <div className="glass-card p-6 space-y-4">
+                    <h3 className="text-lg font-semibold text-neon-purple">Profile</h3>
+                    <div>
+                        <label className="text-sm text-white/60 mb-1 block">Full Name</label>
+                        <input className="neon-input" value={form.full_name} onChange={e => setForm({...form, full_name: e.target.value})} />
+                    </div>
+                    <div>
+                        <label className="text-sm text-white/60 mb-1 block">Timezone</label>
+                        <input className="neon-input" value={form.timezone} onChange={e => setForm({...form, timezone: e.target.value})} />
+                    </div>
+                </div>
+                <div className="glass-card p-6 space-y-4">
+                    <h3 className="text-lg font-semibold text-neon-purple">Alert Channels</h3>
+                    <div>
+                        <label className="text-sm text-white/60 mb-1 block">Notification Email</label>
+                        <input className="neon-input" value={form.notification_email} onChange={e => setForm({...form, notification_email: e.target.value})} placeholder="alerts@example.com" />
+                    </div>
+                    <div>
+                        <label className="text-sm text-white/60 mb-1 block">Webhook URL</label>
+                        <input className="neon-input" value={form.webhook_url} onChange={e => setForm({...form, webhook_url: e.target.value})} placeholder="https://..." />
+                    </div>
+                    <div>
+                        <label className="text-sm text-white/60 mb-1 block">Discord Webhook</label>
+                        <input className="neon-input" value={form.discord_webhook} onChange={e => setForm({...form, discord_webhook: e.target.value})} placeholder="https://discord.com/api/webhooks/..." />
+                    </div>
+                    <div>
+                        <label className="text-sm text-white/60 mb-1 block">Slack Webhook</label>
+                        <input className="neon-input" value={form.slack_webhook} onChange={e => setForm({...form, slack_webhook: e.target.value})} placeholder="https://hooks.slack.com/..." />
+                    </div>
+                </div>
+                <div className="glass-card p-6 space-y-4">
+                    <h3 className="text-lg font-semibold text-neon-purple">API Access</h3>
+                    <div>
+                        <label className="text-sm text-white/60 mb-1 block">API Key</label>
+                        <input className="neon-input font-mono" value={user.api_key} readOnly />
+                    </div>
+                    <div>
+                        <label className="text-sm text-white/60 mb-1 block">Plan</label>
+                        <span className="px-3 py-1 rounded-full bg-neon-purple/20 text-neon-purple uppercase font-semibold">{user.plan}</span>
+                        <span className="text-white/40 ml-3">({user.max_monitors} monitors max)</span>
+                    </div>
+                </div>
+                <button onClick={save} className="neon-btn w-full py-3" disabled={saving}>{saving ? 'Saving...' : '💾 Save Settings'}</button>
+            </div>
+        );
+    }
+
+    // ======== Sidebar ========
+    function Sidebar({ currentPage, setPage, user, onLogout, siteConfig }) {
+        const isAdmin = user.role === 'admin' || user.role === 'superadmin';
+
+        const links = [
+            { id: 'dashboard', label: 'Dashboard', icon: '📊' },
+            { id: 'monitors', label: 'Monitors', icon: '📡' },
+            { id: 'settings', label: 'Settings', icon: '⚙️' },
+        ];
+        const adminLinks = [
+            { id: 'admin-stats', label: 'System Stats', icon: '📈' },
+            { id: 'admin-users', label: 'Users', icon: '👥' },
+            { id: 'admin-config', label: 'Site Config', icon: '🎨' },
+        ];
+
+        return (
+            <div className="sidebar w-64 min-h-screen p-4 flex flex-col">
+                <div className="mb-8 px-2">
+                    <Logo config={siteConfig} size="sm" />
+                </div>
+
+                <nav className="flex-1 space-y-1">
+                    {links.map(link => (
+                        <div key={link.id} className={`sidebar-link ${currentPage === link.id ? 'active' : ''}`} onClick={() => setPage(link.id)}>
+                            <span className="text-xl">{link.icon}</span>
+                            <span>{link.label}</span>
+                        </div>
+                    ))}
+
+                    {isAdmin && (
+                        <>
+                            <div className="mt-6 mb-2 px-4 text-xs text-neon-pink/60 uppercase tracking-wider font-semibold">Admin Panel</div>
+                            {adminLinks.map(link => (
+                                <div key={link.id} className={`sidebar-link ${currentPage === link.id ? 'active' : ''}`} onClick={() => setPage(link.id)}>
+                                    <span className="text-xl">{link.icon}</span>
+                                    <span>{link.label}</span>
+                                </div>
+                            ))}
+                        </>
+                    )}
+                </nav>
+
+                <div className="mt-auto pt-4 border-t border-white/10">
+                    <div className="px-4 py-2">
+                        <p className="text-sm font-semibold text-white/80">{user.full_name || user.username}</p>
+                        <p className="text-xs text-white/40">{user.email}</p>
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-neon-purple/20 text-neon-purple mt-1 inline-block">{user.role}</span>
+                    </div>
+                    <div className="sidebar-link mt-2 text-red-400" onClick={onLogout}>
+                        <span>🚪</span>
+                        <span>Logout</span>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    // ======== Main App ========
+    function App() {
+        const [token, setToken] = useState(localStorage.getItem('nw_token'));
+        const [user, setUser] = useState(null);
+        const [page, setPage] = useState('dashboard');
+        const [authPage, setAuthPage] = useState('login');
+        const [siteConfig, setSiteConfig] = useState(null);
+        const [loading, setLoading] = useState(true);
+
+        // Load site config
+        useEffect(() => {
+            api.get('/site-config').then(d => {
+                setSiteConfig(d.config);
+                document.title = d.config.meta_title || d.config.site_name || 'NeonWatch';
+
+                // Set background video
+                const vidContainer = document.getElementById('bg-video-container');
+                if (d.config.bg_video_url && vidContainer) {
+                    vidContainer.innerHTML = `<video autoplay muted loop playsinline><source src="${d.config.bg_video_url}" type="video/mp4"></video>`;
+                }
+
+                // Set background music source
+                const audio = document.getElementById('bg-audio');
+                if (d.config.bg_music_url && audio) {
+                    audio.src = d.config.bg_music_url;
+                }
+            }).catch(() => {});
+        }, []);
+
+        // Validate token on load
+        useEffect(() => {
+            if (token) {
+                api.get('/auth/me', token).then(d => {
+                    setUser(d.user);
+                    setLoading(false);
+                }).catch(() => {
+                    localStorage.removeItem('nw_token');
+                    setToken(null);
+                    setLoading(false);
+                });
+            } else {
+                setLoading(false);
+            }
+        }, [token]);
+
+        const handleLogin = (newToken, userData) => {
+            localStorage.setItem('nw_token', newToken);
+            setToken(newToken);
+            setUser(userData);
+        };
+
+        const handleLogout = () => {
+            localStorage.removeItem('nw_token');
+            setToken(null);
+            setUser(null);
+            setPage('dashboard');
+        };
+
+        if (loading) {
+            return (
+                <div className="min-h-screen flex items-center justify-center">
+                    <div className="text-center">
+                        <Spinner size="lg" />
+                        <p className="mt-4 text-neon-pink/60 animate-pulse">Loading NeonWatch...</p>
+                    </div>
+                </div>
+            );
         }
 
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.appendChild(document.createTextNode(text));
-            return div.innerHTML;
+        // Not authenticated
+        if (!token || !user) {
+            return (
+                <div>
+                    <Particles />
+                    {authPage === 'login' ? (
+                        <LoginPage onLogin={handleLogin} switchToRegister={() => setAuthPage('register')} />
+                    ) : (
+                        <RegisterPage onLogin={handleLogin} switchToLogin={() => setAuthPage('login')} />
+                    )}
+                    <MusicToggle musicUrl={siteConfig?.bg_music_url} />
+                </div>
+            );
         }
 
-        // Initialize
-        updateClock();
-        setInterval(updateClock, 1000);
-        updateSystemStats();
-        statsInterval = setInterval(updateSystemStats, 5000);
-        refreshJobs();
+        // Authenticated - render dashboard
+        const renderPage = () => {
+            switch (page) {
+                case 'dashboard': return <DashboardPage token={token} user={user} />;
+                case 'monitors': return <DashboardPage token={token} user={user} />;
+                case 'settings': return <SettingsPage token={token} user={user} onUpdate={setUser} />;
+                case 'admin-stats': return <AdminStatsPage token={token} />;
+                case 'admin-users': return <AdminUsersPage token={token} />;
+                case 'admin-config': return <AdminSiteConfigPage token={token} />;
+                default: return <DashboardPage token={token} user={user} />;
+            }
+        };
+
+        return (
+            <div className="flex min-h-screen">
+                <Particles />
+                <Sidebar currentPage={page} setPage={setPage} user={user} onLogout={handleLogout} siteConfig={siteConfig} />
+                <main className="flex-1 p-6 md:p-8 overflow-y-auto relative z-10 min-h-screen">
+                    {renderPage()}
+                </main>
+                <MusicToggle musicUrl={siteConfig?.bg_music_url} />
+            </div>
+        );
+    }
+
+    // ======== RENDER ========
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
     </script>
 </body>
 </html>
-'''
+"""
 
-# ============================================================
-# FLASK APP
-# ============================================================
 
-if HAS_FLASK:
-    app = Flask(__name__)
-    app.secret_key = Config.SECRET_KEY
+# =============================================================================
+# SECTION 26: SERVE FRONTEND
+# =============================================================================
 
-    @app.route('/')
-    def dashboard():
-        return render_template_string(DASHBOARD_HTML)
+@app.get("/", response_class=HTMLResponse, tags=["Frontend"])
+async def serve_frontend():
+    """Serve the full React SPA frontend."""
+    return HTMLResponse(content=FRONTEND_HTML)
 
-    @app.route('/api/jobs', methods=['GET'])
-    def api_list_jobs():
-        return jsonify({"jobs": job_manager.get_all_jobs()})
 
-    @app.route('/api/jobs', methods=['POST'])
-    def api_create_job():
-        try:
-            data = request.get_json(force=True) or {}
+@app.get("/dashboard", response_class=HTMLResponse, tags=["Frontend"])
+@app.get("/login", response_class=HTMLResponse, tags=["Frontend"])
+@app.get("/register", response_class=HTMLResponse, tags=["Frontend"])
+@app.get("/admin", response_class=HTMLResponse, tags=["Frontend"])
+@app.get("/admin/{path:path}", response_class=HTMLResponse, tags=["Frontend"])
+@app.get("/settings", response_class=HTMLResponse, tags=["Frontend"])
+@app.get("/monitors", response_class=HTMLResponse, tags=["Frontend"])
+@app.get("/monitors/{path:path}", response_class=HTMLResponse, tags=["Frontend"])
+async def serve_frontend_routes():
+    """Serve the SPA for all client-side routes."""
+    return HTMLResponse(content=FRONTEND_HTML)
 
-            config = JobConfig(
-                url_pattern=data.get('url_pattern', ''),
-                start_chapter=int(data.get('start_chapter', 1)),
-                end_chapter=int(data.get('end_chapter', 100)),
-                scrape_mode=data.get('scrape_mode', 'pattern'),
-                content_selector=data.get('content_selector', ''),
-                title_selector=data.get('title_selector', ''),
-                next_button_selector=data.get('next_button_selector', ''),
-                start_url=data.get('start_url', ''),
-                max_workers=int(data.get('max_workers', 5)),
-                delay_min=float(data.get('delay_min', 0.5)),
-                delay_max=float(data.get('delay_max', 2.0)),
-                output_format=data.get('output_format', 'single_txt'),
-                novel_name=data.get('novel_name', 'Novel'),
-                login_url=data.get('login_url', ''),
-                login_user=data.get('login_user', ''),
-                login_pass=data.get('login_pass', ''),
-                cookies_json=data.get('cookies_json', ''),
-                use_browser=bool(data.get('use_browser', False)),
-                auto_detect_encoding=True,
-                remove_watermark=bool(data.get('remove_watermark', True)),
-            )
 
-            # Validate
-            if config.scrape_mode == 'pattern' and not config.url_pattern:
-                return jsonify({"success": False, "error": "URL pattern is required for pattern mode"}), 400
-            if config.scrape_mode == 'smart' and not config.start_url:
-                return jsonify({"success": False, "error": "Start URL is required for smart mode"}), 400
+# =============================================================================
+# SECTION 27: PUBLIC STATUS PAGE FRONTEND
+# =============================================================================
 
-            job_id = job_manager.create_job(config)
-            job_manager.start_job(job_id)
-
-            return jsonify({"success": True, "job_id": job_id})
-
-        except Exception as e:
-            logger.error(f"API create job error: {e}\n{traceback.format_exc()}")
-            return jsonify({"success": False, "error": str(e)}), 500
-
-    @app.route('/api/jobs/<job_id>', methods=['GET'])
-    def api_get_job(job_id):
-        status = job_manager.get_job_status(job_id)
-        if not status:
-            return jsonify({"error": "Job not found"}), 404
-        return jsonify({"job": status})
-
-    @app.route('/api/jobs/<job_id>', methods=['DELETE'])
-    def api_delete_job(job_id):
-        job_manager.delete_job(job_id)
-        return jsonify({"success": True})
-
-    @app.route('/api/jobs/<job_id>/pause', methods=['POST'])
-    def api_pause_job(job_id):
-        try:
-            job_manager.pause_job(job_id)
-            return jsonify({"success": True})
-        except Exception as e:
-            return jsonify({"success": False, "error": str(e)}), 400
-
-    @app.route('/api/jobs/<job_id>/resume', methods=['POST'])
-    def api_resume_job(job_id):
-        try:
-            job_manager.resume_job(job_id)
-            return jsonify({"success": True})
-        except Exception as e:
-            return jsonify({"success": False, "error": str(e)}), 400
-
-    @app.route('/api/jobs/<job_id>/cancel', methods=['POST'])
-    def api_cancel_job(job_id):
-        try:
-            job_manager.cancel_job(job_id)
-            return jsonify({"success": True})
-        except Exception as e:
-            return jsonify({"success": False, "error": str(e)}), 400
-
-    @app.route('/api/jobs/<job_id>/chapters', methods=['GET'])
-    def api_get_chapters(job_id):
-        chapters = job_manager.get_job_chapters(job_id)
-        return jsonify({"chapters": chapters})
-
-    @app.route('/api/jobs/<job_id>/files', methods=['GET'])
-    def api_get_files(job_id):
-        files = job_manager.get_output_files(job_id)
-        return jsonify({"files": files})
-
-    @app.route('/api/download')
-    def api_download():
-        file_path = request.args.get('path', '')
-        if not file_path:
-            return "No path specified", 400
-        p = Path(file_path)
-        if not p.exists() or not p.is_file():
-            return "File not found", 404
-        # Security: ensure file is within our output directory
-        try:
-            p.resolve().relative_to(DATA_DIR.resolve())
-        except ValueError:
-            return "Access denied", 403
-        return send_file(str(p), as_attachment=True, download_name=p.name)
-
-    @app.route('/api/logs', methods=['GET'])
-    def api_get_logs():
-        n = int(request.args.get('n', 200))
-        logs = memory_log_handler.get_logs(n)
-        return jsonify({"logs": logs})
-
-    @app.route('/api/logs', methods=['DELETE'])
-    def api_clear_logs():
-        memory_log_handler.clear()
-        return jsonify({"success": True})
-
-    @app.route('/api/system', methods=['GET'])
-    def api_system():
-        stats = PerformanceMonitor.get_stats()
-        active = sum(1 for j in job_manager.jobs.values() if j.status == JobStatus.RUNNING)
-        stats['active_jobs'] = active
-        stats['total_jobs'] = len(job_manager.jobs)
-        return jsonify(stats)
-
-    @app.route('/api/health', methods=['GET'])
-    def api_health():
-        return jsonify({
-            "status": "healthy",
-            "timestamp": datetime.now().isoformat(),
-            "uptime": time.time(),
-            "version": "2.0.0",
-            "libraries": {
-                "requests": HAS_REQUESTS,
-                "beautifulsoup4": HAS_BS4,
-                "playwright": HAS_PLAYWRIGHT,
-                "cloudscraper": HAS_CLOUDSCRAPER,
-                "chardet": HAS_CHARDET,
-                "psutil": HAS_PSUTIL,
-                "ebooklib": HAS_EPUB,
+STATUS_PAGE_HTML = """
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Status Page - NeonWatch</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+    body { font-family: 'Inter', sans-serif; background: linear-gradient(135deg, #0D0015, #2E0249, #1A0130); color: #e2e8f0; min-height: 100vh; }
+    .glass { background: rgba(13,0,21,0.6); backdrop-filter: blur(20px); border: 1px solid rgba(248,6,204,0.15); border-radius: 16px; }
+    .status-up { color: #00FF88; } .status-down { color: #FF1744; }
+    .dot-up { background: #00FF88; box-shadow: 0 0 10px #00FF88; }
+    .dot-down { background: #FF1744; box-shadow: 0 0 10px #FF1744; }
+</style>
+</head><body class="p-4 md:p-8">
+<div id="status-root" class="max-w-4xl mx-auto"></div>
+<script>
+const slug = window.location.pathname.split('/status/')[1];
+if (slug) {
+    fetch('/api/status/' + slug).then(r => r.json()).then(data => {
+        if (!data.success) { document.getElementById('status-root').innerHTML = '<p class="text-center text-xl mt-20">Status page not found.</p>'; return; }
+        const p = data.page;
+        let html = `<div class="text-center mb-8"><h1 class="text-4xl font-bold" style="background: linear-gradient(to right, #F806CC, #A855F7); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">${p.title}</h1>`;
+        if (p.description) html += `<p class="text-white/50 mt-2">${p.description}</p>`;
+        html += `<p class="mt-4 text-2xl font-bold ${data.overall_uptime >= 99 ? 'status-up' : 'status-down'}">${data.overall_uptime.toFixed(2)}% Overall Uptime</p></div>`;
+        html += '<div class="space-y-4">';
+        data.monitors.forEach(m => {
+            const isUp = m.status === 'up';
+            html += `<div class="glass p-5"><div class="flex items-center justify-between"><div class="flex items-center gap-3"><span class="w-3 h-3 rounded-full ${isUp ? 'dot-up' : 'dot-down'}"></span><h3 class="font-semibold text-lg">${m.name}</h3></div><span class="${isUp ? 'status-up' : 'status-down'} font-bold">${isUp ? 'Operational' : 'Down'}</span></div><div class="mt-3 flex gap-1 h-6">`;
+            if (m.daily && m.daily.length > 0) {
+                m.daily.forEach(d => {
+                    const u = d.uptime_percentage || 100;
+                    const c = u >= 99.5 ? '#00FF88' : u >= 95 ? '#FFE500' : '#FF1744';
+                    html += `<div style="flex:1;background:${c};border-radius:2px;min-width:3px;" title="${d.date}: ${u.toFixed(1)}%"></div>`;
+                });
             }
-        })
+            html += `</div><div class="flex justify-between mt-2 text-xs text-white/40"><span>30 days ago</span><span>Today</span></div><p class="text-sm text-white/50 mt-2">Uptime: ${(m.uptime_percentage || 100).toFixed(2)}% | Response: ${m.last_response_time?.toFixed(0) || '-'}ms</p></div>`;
+        });
+        html += '</div><p class="text-center text-white/30 text-sm mt-8">Powered by NeonWatch ⚡</p>';
+        document.getElementById('status-root').innerHTML = html;
+    });
+}
+</script></body></html>
+"""
 
-else:
-    app = None
+
+@app.get("/status/{slug}", response_class=HTMLResponse, tags=["Frontend"])
+async def serve_status_page(slug: str):
+    """Serve the public status page HTML."""
+    return HTMLResponse(content=STATUS_PAGE_HTML)
 
 
-# ============================================================
-# MAIN
-# ============================================================
+# =============================================================================
+# SECTION 28: ERROR HANDLERS
+# =============================================================================
 
-def main():
-    """Entry point."""
-    print("""
-    ╔══════════════════════════════════════════════════╗
-    ║    🔥 Novel Scraper Engine v2.0.0               ║
-    ║    Production-Grade Scraping Platform            ║
-    ╠══════════════════════════════════════════════════╣
-    ║  Libraries:                                      ║
-    ║    requests:      {:<30s}  ║
-    ║    beautifulsoup4: {:<30s}  ║
-    ║    playwright:     {:<30s}  ║
-    ║    cloudscraper:   {:<30s}  ║
-    ║    chardet:        {:<30s}  ║
-    ║    psutil:         {:<30s}  ║
-    ║    ebooklib:       {:<30s}  ║
-    ║    flask:          {:<30s}  ║
-    ╠══════════════════════════════════════════════════╣
-    ║  Server: {}:{:<36s}  ║
-    ║  CPUs: {:<42s}  ║
-    ║  Data Dir: {:<38s}  ║
-    ╚══════════════════════════════════════════════════╝
-    """.format(
-        '✅' if HAS_REQUESTS else '❌',
-        '✅' if HAS_BS4 else '❌',
-        '✅' if HAS_PLAYWRIGHT else '❌',
-        '✅' if HAS_CLOUDSCRAPER else '❌',
-        '✅' if HAS_CHARDET else '❌',
-        '✅' if HAS_PSUTIL else '❌',
-        '✅' if HAS_EPUB else '❌',
-        '✅' if HAS_FLASK else '❌',
-        Config.HOST, str(Config.PORT),
-        str(Config.CPU_COUNT),
-        str(DATA_DIR),
-    ))
-
-    if not HAS_REQUESTS:
-        print("❌ CRITICAL: 'requests' library not installed. Run: pip install requests")
-        sys.exit(1)
-
-    if not HAS_BS4:
-        print("⚠️  WARNING: 'beautifulsoup4' not installed. Content extraction will be limited.")
-        print("   Run: pip install beautifulsoup4")
-
-    if not HAS_FLASK:
-        print("❌ CRITICAL: 'flask' library not installed. Run: pip install flask")
-        sys.exit(1)
-
-    # Graceful shutdown
-    def signal_handler(sig, frame):
-        print("\n🛑 Shutting down gracefully...")
-        for jid in list(job_manager.scraper_engines.keys()):
-            try:
-                job_manager.cancel_job(jid)
-            except Exception:
-                pass
-        sys.exit(0)
-
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-
-    logger.info(f"Starting Novel Scraper Engine on {Config.HOST}:{Config.PORT}")
-
-    app.run(
-        host=Config.HOST,
-        port=Config.PORT,
-        debug=Config.DEBUG,
-        threaded=True,
-        use_reloader=False,
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"success": False, "detail": exc.detail, "status_code": exc.status_code},
     )
 
 
-if __name__ == '__main__':
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Unhandled exception: {exc}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={"success": False, "detail": "Internal server error", "status_code": 500},
+    )
+
+
+# =============================================================================
+# SECTION 29: MIDDLEWARE - Request Logging
+# =============================================================================
+
+@app.middleware("http")
+async def request_logging_middleware(request: Request, call_next):
+    """Log all incoming requests."""
+    start = time.time()
+    response = await call_next(request)
+    elapsed = round((time.time() - start) * 1000, 2)
+
+    if not request.url.path.startswith("/api/health"):
+        logger.debug(
+            f"{request.method} {request.url.path} -> {response.status_code} ({elapsed}ms)"
+        )
+
+    response.headers["X-Response-Time"] = f"{elapsed}ms"
+    response.headers["X-Powered-By"] = "NeonWatch/1.0"
+    return response
+
+
+# =============================================================================
+# SECTION 30: MAIN ENTRY POINT
+# =============================================================================
+
+def main():
+    """Main entry point for running the application."""
+    import uvicorn
+
+    print("""
+    ╔══════════════════════════════════════════════════════════════╗
+    ║                                                              ║
+    ║   ⚡ NEONWATCH - GOD LEVEL UPTIME MONITORING ⚡              ║
+    ║                                                              ║
+    ║   🌐 Frontend:  http://localhost:8000                        ║
+    ║   📚 API Docs:  http://localhost:8000/docs                   ║
+    ║   🔐 Admin:     admin / admin123456                          ║
+    ║                                                              ║
+    ║   Theme: Neon Pink & Purple Gradient 💜💖                     ║
+    ║   Status: KHATARNAK MODE ACTIVATED 🔥                        ║
+    ║                                                              ║
+    ╚══════════════════════════════════════════════════════════════╝
+    """)
+
+    uvicorn.run(
+        "monitoring:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=settings.DEBUG,
+        log_level="info",
+        workers=1,
+        access_log=True,
+    )
+
+
+if __name__ == "__main__":
     main()
